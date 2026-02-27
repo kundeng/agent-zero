@@ -19,8 +19,10 @@ if [ "$BRANCH" = "local" ]; then
     # find "/git/agent-zero" -type f | sort
 else
     # For other branches, clone from GitHub
+    # Remove any existing copy (DockerfileLocal COPYs local files here)
+    rm -rf /git/agent-zero
     echo "Cloning repository from branch $BRANCH..."
-    git clone -b "$BRANCH" "https://github.com/agent0ai/agent-zero" "/git/agent-zero" || {
+    git clone -b "$BRANCH" "https://github.com/kundeng/agent-zero" "/git/agent-zero" || {
         echo "CRITICAL ERROR: Failed to clone repository. Branch: $BRANCH"
         exit 1
     }
