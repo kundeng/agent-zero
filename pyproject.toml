@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hyperagent0"
+version = "0.1.0.dev0"
+description = "HyperAgent Zero — host-first agentic harness forked from agent0ai/agent-zero"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+    { name = "HyperAgent Zero contributors" },
+]
+keywords = ["agent", "llm", "agentic", "claude", "anthropic"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+]
+dynamic = ["dependencies"]
+
+[project.optional-dependencies]
+claude-sdk = ["claude-agent-sdk"]
+telegram = ["python-telegram-bot>=21"]
+slack = ["slack-bolt>=1.18"]
+discord = ["discord.py>=2.3"]
+channels = [
+    "python-telegram-bot>=21",
+    "slack-bolt>=1.18",
+    "discord.py>=2.3",
+]
+all = [
+    "claude-agent-sdk",
+    "python-telegram-bot>=21",
+    "slack-bolt>=1.18",
+    "discord.py>=2.3",
+]
+
+[project.scripts]
+hyperagent0 = "hyperagent0.cli:main"
+haz = "hyperagent0.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/kundeng/hyperagent-zero"
+Repository = "https://github.com/kundeng/hyperagent-zero"
+
+# ---------------------------------------------------------------------------
+# setuptools configuration
+#
+# Per spec 01-host-first D9: ship the new wrapper package `hyperagent0/` AND
+# the unchanged upstream-mirrored `python/` tree in the same wheel. This is
+# a transitional layout — eventually upstream code may migrate under
+# `hyperagent0/` but for now we preserve cherry-pick ergonomics.
+# ---------------------------------------------------------------------------
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hyperagent0*", "python*"]
+exclude = ["tests*", "logs*", "tmp*", "usr*", "webui*", "docker*", "docs*"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
