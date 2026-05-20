@@ -57,6 +57,7 @@ __all__ = [
     "get_backend",
     "register_backend",
     "registered_modes",
+    "list_registered_modes",
     "auto_detect_backend",
     "recommend_mode_for_wizard",
 ]
@@ -109,6 +110,10 @@ def register_backend(mode: str, backend_cls: type[SandboxBackend]) -> None:
 def registered_modes() -> list[str]:
     """Return all known mode strings."""
     return sorted(set(_BUILTIN_BACKENDS) | set(_EXTRA_BACKENDS))
+
+
+# Spec-05 backwards-compat alias.
+list_registered_modes = registered_modes
 
 
 def get_backend(

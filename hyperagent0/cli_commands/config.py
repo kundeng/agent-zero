@@ -1,25 +1,35 @@
 """``haz config`` — read/write daemon configuration.
 
-Stub for P2/P3 work — currently only supports printing the active
-settings path so users can edit the underlying JSON by hand. The full
-``get`` / ``set`` / ``edit`` surface is tracked in spec 03 task 3.1.
+Self-contained: reads ``usr/settings.json`` directly via stdlib ``json``
+to avoid pulling the full upstream model stack (LiteLLM, browser_use,
+etc.) through ``python.helpers.settings``. Honors the cold-start
+budget per spec 03 D5.
 """
 
 from __future__ import annotations
 
-import sys
+import json
 from pathlib import Path
 
 import click
 
 
-def _settings_module():
-    repo_root = Path(__file__).resolve().parents[2]
-    if str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
-    from python.helpers import settings as settings_helper  # type: ignore
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
 
-    return settings_helper
+
+def _settings_path() -> Path:
+    return _repo_root() / "usr" / "settings.json"
+
+
+def _load_settings() -> dict | None:
+    path = _settings_path()
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise click.ClickException(f"failed to read {path}: {exc}")
 
 
 @click.group("config")
@@ -31,11 +41,7 @@ def command() -> None:
 def _path() -> None:
     """Print the path of the active settings file."""
 
-    settings_helper = _settings_module()
-    path = getattr(settings_helper, "SETTINGS_FILE", None) or getattr(
-        settings_helper, "settings_file_path", None
-    )
-    click.echo(str(path) if path else "(unknown)")
+    click.echo(str(_settings_path()))
 
 
 @command.command("get")
@@ -43,9 +49,18 @@ def _path() -> None:
 def _get(key: str) -> None:
     """Print the current value for ``KEY``."""
 
-    settings_helper = _settings_module()
-    current = settings_helper.get_settings()
+    current = _load_settings()
+    if current is None:
+        click.echo(
+            f"hyperagent0: no settings file at {_settings_path()}",
+            err=True,
+        )
+        raise click.exceptions.Exit(1)
     if key not in current:
         click.echo(f"hyperagent0: unknown setting {key!r}", err=True)
         raise click.exceptions.Exit(1)
-    click.echo(current[key])
+    value = current[key]
+    if isinstance(value, (dict, list)):
+        click.echo(json.dumps(value, indent=2))
+    else:
+        click.echo(value)

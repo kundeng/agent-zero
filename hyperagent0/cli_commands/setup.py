@@ -1,37 +1,42 @@
 """``haz setup`` — interactive first-run wizard.
 
-Minimal v1 implementation: prompts for the values most users need to
-change (API key, model, port) and writes them into the existing
-upstream settings file. This keeps the wizard useful without dragging
-in the full settings schema at CLI cold-start time.
-
-Heavy imports (``python.helpers.settings``) happen inside
-:func:`command` so we don't break the cold-start budget for anyone
-else.
+Self-contained: reads and writes ``usr/settings.json`` directly via
+stdlib ``json``. The upstream settings helper provides defaults at
+runtime, so a partial settings file is sufficient — we only need to
+persist the fields the user explicitly changes here. This avoids
+pulling LiteLLM / models.py / browser_use through the cold path.
 """
 
 from __future__ import annotations
 
-import sys
+import json
 from pathlib import Path
 
 import click
 
 
-def _settings_module():
-    """Lazy import of the upstream settings helper.
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
 
-    The CLI is shipped as the ``hyperagent0`` wrapper package alongside
-    the upstream ``python/`` tree; we have to make the repo root
-    importable when invoked as a console_script.
-    """
 
-    repo_root = Path(__file__).resolve().parents[2]
-    if str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
-    from python.helpers import settings as settings_helper  # type: ignore
+def _settings_path() -> Path:
+    return _repo_root() / "usr" / "settings.json"
 
-    return settings_helper
+
+def _load_settings() -> dict:
+    path = _settings_path()
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise click.ClickException(f"failed to read {path}: {exc}")
+
+
+def _save_settings(data: dict) -> None:
+    path = _settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 @click.command("setup")
@@ -44,19 +49,15 @@ def _settings_module():
 def command(non_interactive: bool) -> None:
     """Interactive first-run wizard for the most common settings."""
 
-    settings_helper = _settings_module()
-    current = settings_helper.get_settings()
+    settings_path = _settings_path()
+    current = _load_settings()
 
     if non_interactive:
-        # Best-effort surface where the settings file lives. Different
-        # upstream versions expose this differently; fall back gracefully.
-        path = getattr(settings_helper, "SETTINGS_FILE", None) or getattr(
-            settings_helper, "settings_file_path", None
-        )
-        click.echo(f"hyperagent0 settings file: {path or '(unknown)'}")
+        click.echo(f"hyperagent0 settings file: {settings_path}")
         return
 
     click.echo("hyperagent0 setup wizard")
+    click.echo(f"Settings file: {settings_path}")
     click.echo("Press Enter to keep the current value.\n")
 
     provider = click.prompt(
@@ -65,12 +66,16 @@ def command(non_interactive: bool) -> None:
     )
     model = click.prompt(
         "Chat model name",
-        default=current.get("chat_model_name", "claude-sonnet-4-20250514"),
+        default=current.get("chat_model_name", "claude-sonnet-4-5"),
     )
     api_base = click.prompt(
         "Chat model API base (blank for provider default)",
         default=current.get("chat_model_api_base", "") or "",
         show_default=True,
+    )
+    sandbox_mode = click.prompt(
+        "Sandbox mode (none / sandbox / ssh / cgroup / docker / podman)",
+        default=current.get("sandbox_mode", "none"),
     )
 
     new = dict(current)
@@ -78,18 +83,11 @@ def command(non_interactive: bool) -> None:
     new["chat_model_name"] = model
     if api_base:
         new["chat_model_api_base"] = api_base
+    elif "chat_model_api_base" in new and new["chat_model_api_base"] == "":
+        # Clear empty placeholders.
+        del new["chat_model_api_base"]
+    new["sandbox_mode"] = sandbox_mode
 
-    try:
-        settings_helper.set_settings(new)  # type: ignore[attr-defined]
-    except AttributeError:
-        # Older upstream API; try the alternative name.
-        try:
-            settings_helper.save_settings(new)  # type: ignore[attr-defined]
-        except AttributeError:
-            click.echo(
-                "hyperagent0: settings module lacks a known setter; aborting.",
-                err=True,
-            )
-            raise click.exceptions.Exit(1)
-
-    click.echo("\nSettings saved. Run 'haz start' to launch the daemon.")
+    _save_settings(new)
+    click.echo(f"\nSettings saved to {settings_path}.")
+    click.echo("Run 'haz start' to launch the daemon.")
