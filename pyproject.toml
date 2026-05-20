@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# NOTE: This is a minimal pyproject.toml created by spec 03 (daemon-cli)
+# to wire up the `hyperagent0` and `haz` console_script entry points.
+# Spec 01 (host-first / packaging) owns the full packaging contract and
+# will replace/extend this file at merge time. Treat the metadata below
+# as the smallest viable set that lets the CLI install and run.
+
+[project]
+name = "hyperagent0"
+version = "0.1.0"
+description = "Host-first agentic harness — fork of agent-zero with daemon, CLI, and channel adapters."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Kun Deng", email = "imkundeng@gmail.com" },
+]
+keywords = ["agent", "llm", "cli", "daemon"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "click>=8.1",
+]
+
+[project.scripts]
+# Two binaries, same Click group. See spec 03 D5 (lazy subcommand loading)
+# and the hyperagent0/cli.py module docstring.
+hyperagent0 = "hyperagent0.cli:main"
+haz = "hyperagent0.cli:main"
+
+[tool.setuptools]
+# Spec 01 will reconcile this with the upstream python/ tree layout.
+# For now: ship only the wrapper package so `pip install .` can wire
+# the entry points without pulling the entire agent runtime into the
+# wheel (which is still source-installed in development).
+packages = ["hyperagent0", "hyperagent0.cli_commands"]
