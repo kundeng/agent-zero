@@ -1,0 +1,3 @@
+# Dependencies for the hyperagent0 wrapper package (separate from upstream
+# requirements.txt to preserve cherry-pick ergonomics per spec 01 D9).
+click>=8.1

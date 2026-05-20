@@ -15,6 +15,7 @@ authors = [
 keywords = ["agent", "llm", "agentic", "claude", "anthropic"]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Environment :: Console",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -42,6 +43,7 @@ all = [
 ]
 
 [project.scripts]
+# Two binaries, same Click group. See spec 03 D5 (lazy subcommand loading).
 hyperagent0 = "hyperagent0.cli:main"
 haz = "hyperagent0.cli:main"
 
@@ -66,7 +68,9 @@ include = ["hyperagent0*", "python*"]
 exclude = ["tests*", "logs*", "tmp*", "usr*", "webui*", "docker*", "docs*"]
 
 [tool.setuptools.dynamic]
-dependencies = { file = ["requirements.txt"] }
+# Combine upstream requirements.txt with our own wrapper deps so we never
+# patch upstream's requirements.txt (preserves cherry-pick ergonomics).
+dependencies = { file = ["requirements.txt", "requirements-hyperagent0.txt"] }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

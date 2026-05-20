@@ -15,6 +15,11 @@
 # Ignore all contents of the virtual environment directory
 .venv/
 
+# Python build artifacts (spec 03)
+*.egg-info/
+build/
+dist/
+
 # obsolete folders
 memory/
 knowledge/custom/
