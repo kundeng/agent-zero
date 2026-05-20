@@ -1,5 +1,6 @@
 import argparse
 import inspect
+import os
 import secrets
 from pathlib import Path
 from typing import TypeVar, Callable, Awaitable, Union, overload, cast
@@ -54,11 +55,44 @@ def has_arg(name: str):
 
 
 def is_dockerized() -> bool:
-    return bool(get_arg("dockerized"))
+    """Backward-compatible alias for :func:`is_docker_mode`.
+
+    Spec 01-host-first task 1.2: delegate to the dedicated
+    deployment-mode resolver under :mod:`hyperagent0.runtime`. The
+    legacy ``--dockerized`` CLI arg still wins, but we now also honor
+    the ``DEPLOYMENT_MODE`` env var and auto-detect ``/.dockerenv``.
+    """
+    # Local import keeps python.helpers.runtime importable even if the
+    # wrapper package isn't on sys.path yet (e.g., during build).
+    from hyperagent0.runtime import is_docker_mode
+    if bool(get_arg("dockerized")):
+        return True
+    return is_docker_mode()
+
+
+def is_host_mode() -> bool:
+    """Return True if the agent is running directly on the host."""
+    return not is_dockerized()
+
+
+def is_docker_mode() -> bool:
+    """Return True if the agent is running inside a Docker container."""
+    return is_dockerized()
 
 
 def is_development() -> bool:
-    return not is_dockerized()
+    """Development mode is opt-in: --development CLI flag or A0_DEV=1.
+
+    Spec 01-host-first task 1.2 decouples this from container detection.
+    Previously, ``is_development()`` was defined as ``not is_dockerized()``
+    which silently turned on RFC dispatch for any host-mode user — exactly
+    what we don't want for the host-first default. Now a host-mode operator
+    must opt in explicitly.
+    """
+    if bool(get_arg("development")):
+        return True
+    env_value = os.environ.get("A0_DEV", "").strip().lower()
+    return env_value in ("1", "true", "yes", "on")
 
 
 def get_local_url():
