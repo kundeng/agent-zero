@@ -24,9 +24,10 @@ class SshBackend(SandboxBackend):
         self,
         *,
         project_dir: str | None = None,
+        settings: Any = None,
         connection: dict[str, Any] | None = None,
     ) -> None:
-        super().__init__(project_dir=project_dir)
+        super().__init__(project_dir=project_dir, settings=settings)
         # Connection params are supplied by the caller (code_execution_tool)
         # from AgentConfig.code_exec_ssh_*. We keep the backend stateless
         # about defaults — the tool layer owns the resolved values.
