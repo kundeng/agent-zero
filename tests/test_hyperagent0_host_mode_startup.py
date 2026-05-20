@@ -41,9 +41,15 @@ def test_sandbox_registry_works_without_docker(monkeypatch):
     assert backend.mode == "none"
 
 
-def _import_runtime():
+def _import_and_reload_runtime():
+    # When other tests cache a partial python.helpers, ``from python.helpers
+    # import runtime`` can succeed yielding the cached module, but a subsequent
+    # importlib.reload() re-triggers transitive imports (settings.py →
+    # browser_use_monkeypatch → browser_use) that may not be installed. Wrap
+    # both the import and the reload in the same skip envelope.
     try:
         from python.helpers import runtime as rt
+        importlib.reload(rt)
     except ModuleNotFoundError as e:
         pytest.skip(f"python.helpers.runtime unavailable: {e}")
     return rt
@@ -53,8 +59,7 @@ def test_is_development_default_false(monkeypatch):
     """Host-mode users must not silently land in development mode."""
     monkeypatch.delenv("A0_DEV", raising=False)
     monkeypatch.setattr("sys.argv", ["prog"])
-    rt = _import_runtime()
-    importlib.reload(rt)
+    rt = _import_and_reload_runtime()
     rt.initialize()
     assert rt.is_development() is False
 
@@ -62,7 +67,6 @@ def test_is_development_default_false(monkeypatch):
 def test_is_development_opts_in_via_env(monkeypatch):
     monkeypatch.setenv("A0_DEV", "1")
     monkeypatch.setattr("sys.argv", ["prog"])
-    rt = _import_runtime()
-    importlib.reload(rt)
+    rt = _import_and_reload_runtime()
     rt.initialize()
     assert rt.is_development() is True
