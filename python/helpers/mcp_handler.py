@@ -727,6 +727,21 @@ class MCPConfig(BaseModel):
                     tools.append({f"{server.name}.{tool['name']}": tool_copy})
             return tools
 
+    def get_tools_for_claude_sdk(self) -> List[dict[str, Any]]:
+        """Spec 02-claude-sdk task 1.6 — return MCP tools as Claude tool schemas.
+
+        Only meaningful when ``chat_model_provider == "claude-sdk"``; the
+        bridge module is imported lazily so the base wheel does not pay for
+        the spec-02 code path unless it is needed.
+        """
+        from hyperagent0.claude_sdk.mcp import (
+            is_claude_sdk_active,
+            register_mcp_tools_for_claude,
+        )
+        if not is_claude_sdk_active():
+            return []
+        return register_mcp_tools_for_claude(self.get_tools())
+
     def get_tools_prompt(self, server_name: str = "") -> str:
         """Get a prompt for all tools"""
 
