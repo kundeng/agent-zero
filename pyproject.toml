@@ -26,7 +26,12 @@ classifiers = [
 dynamic = ["dependencies"]
 
 [project.optional-dependencies]
-claude-sdk = ["claude-agent-sdk"]
+# Spec 02: opt-in Claude Agent SDK provider. Base wheel does not depend on these;
+# `anthropic` MUST NOT be imported unless chat_model_provider=claude-sdk is selected.
+claude-sdk = [
+    "anthropic>=0.40",
+    "claude-agent-sdk",
+]
 telegram = ["python-telegram-bot>=21"]
 slack = ["slack-bolt>=1.18"]
 discord = ["discord.py>=2.3"]
@@ -36,6 +41,7 @@ channels = [
     "discord.py>=2.3",
 ]
 all = [
+    "anthropic>=0.40",
     "claude-agent-sdk",
     "python-telegram-bot>=21",
     "slack-bolt>=1.18",

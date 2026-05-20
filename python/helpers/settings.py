@@ -159,6 +159,12 @@ class Settings(TypedDict):
     # LiteLLM global kwargs applied to all model calls
     litellm_global_kwargs: dict[str, Any]
 
+    # Spec 02-claude-sdk: opt-in Claude Agent SDK provider settings.
+    # These are only consumed when chat_model_provider == "claude-sdk".
+    claude_sdk_api_key: str
+    claude_sdk_model: str
+    claude_sdk_thinking_budget: int
+
     update_check_enabled: bool
 
 
@@ -626,6 +632,10 @@ def get_default_settings() -> Settings:
         variables="",
         secrets="",
         litellm_global_kwargs=get_default_value("litellm_global_kwargs", {}),
+        # Spec 02-claude-sdk defaults — disabled until user opts in.
+        claude_sdk_api_key=get_default_value("claude_sdk_api_key", ""),
+        claude_sdk_model=get_default_value("claude_sdk_model", "claude-sonnet-4-5"),
+        claude_sdk_thinking_budget=get_default_value("claude_sdk_thinking_budget", 0),
         update_check_enabled=get_default_value("update_check_enabled", True),
     )
 
