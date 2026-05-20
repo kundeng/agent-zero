@@ -1,0 +1,26 @@
+# Minimal pyproject.toml stub for spec-05.
+#
+# Spec 01 owns the authoritative pyproject (project metadata, console_scripts,
+# package discovery). This file exists so spec-05 can declare its optional
+# extras (`docker`, `podman`) without blocking on spec 01. At merge time,
+# fold the `[project.optional-dependencies]` table below into spec 01's
+# pyproject.
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hyperagent0"
+version = "0.1.0.dev0"
+description = "hyperagent harness — fork of agent0ai/agent-zero"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+readme = "README.md"
+
+[project.optional-dependencies]
+docker = ["docker>=7"]
+podman = ["podman>=4"]
+
+[tool.setuptools.packages.find]
+include = ["hyperagent0*", "python*"]
