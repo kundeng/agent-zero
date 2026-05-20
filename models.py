@@ -905,6 +905,26 @@ def get_chat_model(
     provider: str, name: str, model_config: Optional[ModelConfig] = None, **kwargs: Any
 ) -> LiteLLMChatWrapper:
     orig = provider.lower()
+    # spec 02 task 1.3: dispatch to ClaudeSDKWrapper when provider=claude-sdk.
+    # Import is lazy so the base wheel does not require the [claude-sdk] extra.
+    if orig == "claude-sdk":
+        from hyperagent0.claude_sdk.wrapper import ClaudeSDKWrapper
+        # Fill in api_key / model / thinking_budget from settings if not supplied.
+        try:
+            current = settings.get_settings()  # type: ignore[union-attr]
+        except Exception:
+            current = {}
+        if "api_key" not in kwargs:
+            key = current.get("claude_sdk_api_key") or get_api_key("anthropic")
+            if key and key not in ("None", "NA"):
+                kwargs["api_key"] = key
+        if "thinking_budget" not in kwargs:
+            kwargs["thinking_budget"] = int(current.get("claude_sdk_thinking_budget", 0) or 0)
+        name = name or current.get("claude_sdk_model") or "claude-sonnet-4-5"
+        return ClaudeSDKWrapper(  # type: ignore[return-value]
+            model=name, provider=orig, model_config=model_config, **kwargs
+        )
+
     provider_name, kwargs = _merge_provider_defaults("chat", orig, kwargs)
     return _get_litellm_chat(
         LiteLLMChatWrapper, name, provider_name, model_config, **kwargs
