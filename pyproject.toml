@@ -1,3 +1,14 @@
+<<<<<<< HEAD
+=======
+# Minimal pyproject.toml stub for spec-05.
+#
+# Spec 01 owns the authoritative pyproject (project metadata, console_scripts,
+# package discovery). This file exists so spec-05 can declare its optional
+# extras (`docker`, `podman`) without blocking on spec 01. At merge time,
+# fold the `[project.optional-dependencies]` table below into spec 01's
+# pyproject.
+
+>>>>>>> worktree-agent-a4fc26831d9bb5764
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
@@ -5,6 +16,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hyperagent0"
 version = "0.1.0.dev0"
+<<<<<<< HEAD
 description = "HyperAgent Zero — host-first agentic harness forked from agent0ai/agent-zero"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -32,6 +44,9 @@ claude-sdk = [
     "anthropic>=0.40",
     "claude-agent-sdk",
 ]
+# Spec 05: container-spawning sandbox modes. Lazy-imported in their backends.
+docker = ["docker>=7"]
+podman = ["podman>=4"]
 telegram = ["python-telegram-bot>=21"]
 slack = ["slack-bolt>=1.18"]
 discord = ["discord.py>=2.3"]
@@ -43,6 +58,8 @@ channels = [
 all = [
     "anthropic>=0.40",
     "claude-agent-sdk",
+    "docker>=7",
+    "podman>=4",
     "python-telegram-bot>=21",
     "slack-bolt>=1.18",
     "discord.py>=2.3",
@@ -80,3 +97,16 @@ dependencies = { file = ["requirements.txt", "requirements-hyperagent0.txt"] }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+=======
+description = "hyperagent harness — fork of agent0ai/agent-zero"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+readme = "README.md"
+
+[project.optional-dependencies]
+docker = ["docker>=7"]
+podman = ["podman>=4"]
+
+[tool.setuptools.packages.find]
+include = ["hyperagent0*", "python*"]
+>>>>>>> worktree-agent-a4fc26831d9bb5764

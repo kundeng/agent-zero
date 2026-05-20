@@ -37,10 +37,18 @@ class SubAgentSettings(TypedDict):
 
 
 # spec 01-host-first task 1.6, D5: per-project sandbox override.
-# Spec 01 ships a single mode field. Spec 05 will broaden the literal to
-# include "docker"/"podman"/"cgroup" and add resource/network/image keys.
-class ProjectSandboxSettings(TypedDict):
-    mode: Literal["inherit", "none", "sandbox", "ssh"]
+# spec 05 broadens the literal with cgroup/docker/podman and adds the
+# resource_limits / network / image / persist_sandbox keys (all NotRequired
+# to keep the existing JSON files forward-compatible).
+class ProjectSandboxSettings(TypedDict, total=False):
+    mode: Literal[
+        "inherit", "none", "sandbox", "ssh", "cgroup", "docker", "podman"
+    ]
+    # spec 05 additions — all optional in the JSON storage form.
+    resource_limits: dict[str, object]  # cpus, memory, timeout, disk_quota
+    network: object  # "internet" | "local-only" | "none" | dict allowlist
+    image: str
+    persist_sandbox: bool
 
 
 class BasicProjectData(TypedDict):
