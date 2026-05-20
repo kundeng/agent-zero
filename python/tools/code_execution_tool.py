@@ -38,6 +38,46 @@ class ShellWrap:
 class State:
     ssh_enabled: bool
     shells: dict[int, ShellWrap]
+    # spec 01-host-first task 1.5: track the resolved sandbox mode so we
+    # can blow away cached shells when the project switches modes.
+    sandbox_mode: str = ""
+
+
+# spec 01-host-first task 1.5: one-time deprecation warning for the legacy
+# code_exec_ssh_enabled=True path. Logged once per process via a module-level
+# flag to avoid spamming the agent log every time prepare_state runs.
+_legacy_ssh_warning_emitted = False
+
+
+def _resolve_sandbox_mode_with_legacy(agent_config) -> str:
+    """Return the effective sandbox_mode for this agent's code exec.
+
+    Resolution:
+    1. ``AgentConfig.additional['sandbox_mode']`` if set (plumbed by
+       initialize.py from settings + project resolve, task 1.6).
+    2. Auto-migrate legacy ``code_exec_ssh_enabled=True`` → ``"ssh"`` with
+       a one-time deprecation warning.
+    3. Default ``"none"``.
+    """
+    global _legacy_ssh_warning_emitted
+    from hyperagent0.projects import get_agent_sandbox_mode
+
+    resolved = get_agent_sandbox_mode(agent_config, default="")
+    if resolved:
+        return resolved
+
+    if getattr(agent_config, "code_exec_ssh_enabled", False):
+        if not _legacy_ssh_warning_emitted:
+            PrintStyle(background_color="yellow", font_color="black").print(
+                "[deprecation] code_exec_ssh_enabled=True is the legacy flag for "
+                "running code execution over SSH. It is now mapped to "
+                "sandbox_mode='ssh'. Set Settings.sandbox_mode explicitly to "
+                "silence this warning."
+            )
+            _legacy_ssh_warning_emitted = True
+        return "ssh"
+
+    return "none"
 
 
 class CodeExecution(Tool):
@@ -116,9 +156,19 @@ class CodeExecution(Tool):
 
     async def prepare_state(self, reset=False, session: int | None = None):
         self.state: State | None = self.agent.get_data("_cet_state")
-        # always reset state when ssh_enabled changes
-        if not self.state or self.state.ssh_enabled != self.agent.config.code_exec_ssh_enabled:
-            # initialize shells dictionary if not exists
+
+        # spec 01-host-first task 1.5: route through hyperagent0.sandbox.
+        sandbox_mode = _resolve_sandbox_mode_with_legacy(self.agent.config)
+        legacy_ssh_enabled = sandbox_mode == "ssh"
+
+        # Reset cached shells when either the sandbox mode or the legacy
+        # ssh flag effectively flips (covers transitions like none -> ssh
+        # or none -> sandbox).
+        if (
+            not self.state
+            or getattr(self.state, "sandbox_mode", "") != sandbox_mode
+            or self.state.ssh_enabled != legacy_ssh_enabled
+        ):
             shells: dict[int, ShellWrap] = {}
         else:
             shells = self.state.shells.copy()
@@ -133,32 +183,53 @@ class CodeExecution(Tool):
                 await shells[s].session.close()
             shells = {}
 
-        # initialize local or remote interactive shell interface for session 0 if needed
+        # Initialize the interactive shell for the requested session
+        # by delegating to the sandbox registry.
         if session is not None and session not in shells:
             cwd = await self.ensure_cwd()
-            if self.agent.config.code_exec_ssh_enabled:
-                pswd = (
-                    self.agent.config.code_exec_ssh_pass
-                    if self.agent.config.code_exec_ssh_pass
-                    else await rfc_exchange.get_root_password()
-                )
-                shell = SSHInteractiveSession(
-                    self.agent.context.log,
-                    self.agent.config.code_exec_ssh_addr,
-                    self.agent.config.code_exec_ssh_port,
-                    self.agent.config.code_exec_ssh_user,
-                    pswd,
-                    cwd=cwd,
-                )
-            else:
-                shell = LocalInteractiveSession(cwd=cwd)
+            shell = await self._open_shell_via_backend(sandbox_mode, cwd)
 
             shells[session] = ShellWrap(id=session, session=shell, running=False)
-            await shell.connect()
 
-        self.state = State(shells=shells, ssh_enabled=self.agent.config.code_exec_ssh_enabled)
+        self.state = State(
+            shells=shells,
+            ssh_enabled=legacy_ssh_enabled,
+            sandbox_mode=sandbox_mode,
+        )
         self.agent.set_data("_cet_state", self.state)
         return self.state
+
+    async def _open_shell_via_backend(self, sandbox_mode: str, cwd: str):
+        """Open a connected shell through the hyperagent0.sandbox registry.
+
+        For ``sandbox_mode == "ssh"`` we still need the upstream rfc_exchange
+        root-password handshake when no password is configured, so we resolve
+        the connection params here and pass them to the SshBackend.
+        """
+        from hyperagent0.sandbox import get_backend
+
+        if sandbox_mode == "ssh":
+            cfg = self.agent.config
+            pswd = (
+                cfg.code_exec_ssh_pass
+                if cfg.code_exec_ssh_pass
+                else await rfc_exchange.get_root_password()
+            )
+            from hyperagent0.sandbox.ssh import SshBackend
+
+            backend = SshBackend(
+                connection={
+                    "logger": self.agent.context.log,
+                    "hostname": cfg.code_exec_ssh_addr,
+                    "port": cfg.code_exec_ssh_port,
+                    "username": cfg.code_exec_ssh_user,
+                    "password": pswd,
+                }
+            )
+            return await backend.open_shell(cwd=cwd)
+
+        backend = get_backend(sandbox_mode)
+        return await backend.open_shell(cwd=cwd)
 
     async def execute_python_code(self, session: int, code: str, reset: bool = False):
         escaped_code = shlex.quote(code)

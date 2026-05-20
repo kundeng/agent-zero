@@ -3,6 +3,11 @@ import models
 from python.helpers import runtime, settings, defer
 from python.helpers.print_style import PrintStyle
 
+# spec 01-host-first task 1.6: resolve sandbox mode (global default ∘
+# project override) and stash it on AgentConfig.additional so the code
+# execution tool can read it at runtime.
+from hyperagent0.projects import resolve_sandbox_mode, set_agent_sandbox_mode
+
 
 def initialize_agent(override_settings: dict | None = None):
     current_settings = settings.get_settings()
@@ -88,6 +93,12 @@ def initialize_agent(override_settings: dict | None = None):
 
     # update SSH and docker settings
     _set_runtime_config(config, current_settings)
+
+    # spec 01-host-first task 1.6: stash resolved sandbox mode for the
+    # code execution tool. At AgentConfig construction time no project is
+    # active yet, so this reflects the global default; projects.activate_project
+    # refreshes it on the context's config when a project is activated.
+    set_agent_sandbox_mode(config, resolve_sandbox_mode(current_settings, None))  # type: ignore[arg-type]
 
     # update config with runtime args
     _args_override(config)
