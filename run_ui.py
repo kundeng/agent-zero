@@ -409,6 +409,48 @@ def configure_websocket_namespaces(
     return allowed_namespaces
 
 
+def start_server(host: str | None = None, port: int | None = None, **kwargs) -> None:
+    """Importable entry point for the Agent Zero web/MCP/A2A server.
+
+    Thin wrapper around :func:`run` that lets the hyperagent0 CLI start
+    the server without invoking ``run_ui.py`` as a script. ``host`` and
+    ``port`` are optional overrides; if supplied, they are pushed into
+    ``runtime``'s argument table so the existing :func:`run` code path
+    picks them up unchanged. Extra ``kwargs`` are forwarded into runtime
+    args as well, which keeps the door open for future flags without
+    requiring a wider refactor.
+
+    Spec 03 task 1.3 — extract ``start_server`` for daemon-mode use.
+    """
+
+    # Ensure runtime/dotenv have been initialized exactly as the script
+    # path does. Calling these twice is safe.
+    runtime.initialize()
+    dotenv.load_dotenv()
+
+    if host is not None:
+        runtime.set_arg("host", host) if hasattr(runtime, "set_arg") else None
+        # ``runtime.get_arg`` reads from a module-level dict populated by
+        # ``runtime.initialize``. The shim below covers both the case
+        # where a setter exists and where we have to poke the dict.
+        _args = getattr(runtime, "args", None)
+        if isinstance(_args, dict):
+            _args["host"] = host
+    if port is not None:
+        _args = getattr(runtime, "args", None)
+        if isinstance(_args, dict):
+            _args["port"] = port
+        # runtime.get_web_ui_port also consults the WEB_UI_PORT env var.
+        os.environ.setdefault("WEB_UI_PORT", str(port))
+
+    for key, value in kwargs.items():
+        _args = getattr(runtime, "args", None)
+        if isinstance(_args, dict):
+            _args[key] = value
+
+    run()
+
+
 def run():
     PrintStyle().print("Initializing framework...")
 
