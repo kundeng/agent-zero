@@ -131,6 +131,9 @@ class Settings(TypedDict):
     rfc_port_ssh: int
 
     shell_interface: Literal['local','ssh']
+    # spec 01-host-first D2: process-relationship taxonomy for code execution.
+    # Spec 01 ships none/sandbox/ssh; spec 05 broadens to docker/podman/cgroup.
+    sandbox_mode: Literal['none', 'sandbox', 'ssh']
     websocket_server_restart_enabled: bool
     uvicorn_access_logs_enabled: bool
 
@@ -575,12 +578,37 @@ def get_default_settings() -> Settings:
         workdir_max_folders=get_default_value("workdir_max_folders", 20),
         workdir_max_lines=get_default_value("workdir_max_lines", 250),
         workdir_gitignore=get_default_value("workdir_gitignore", gitignore),
-        rfc_auto_docker=get_default_value("rfc_auto_docker", True),
-        rfc_url=get_default_value("rfc_url", "localhost"),
+        # spec 01-host-first task 1.3: host-mode defaults disable Docker/RFC
+        # plumbing by default. Existing Docker users (DEPLOYMENT_MODE=docker
+        # or /.dockerenv) keep the legacy defaults.
+        rfc_auto_docker=get_default_value(
+            "rfc_auto_docker", runtime.is_docker_mode()
+        ),
+        rfc_url=get_default_value(
+            "rfc_url", "" if runtime.is_host_mode() else "localhost"
+        ),
         rfc_password="",
         rfc_port_http=get_default_value("rfc_port_http", 55080),
         rfc_port_ssh=get_default_value("rfc_port_ssh", 55022),
-        shell_interface=get_default_value("shell_interface", "local" if runtime.is_dockerized() else "ssh"),
+        shell_interface=get_default_value(
+            "shell_interface",
+            # Spec 01-host-first task 1.3: default to "local" in both modes.
+            # Host-mode → LocalInteractiveSession on the host (no docker).
+            # Docker-mode → local PTY inside the agent's container (upstream
+            # default behavior). The legacy "ssh" default — meant for a host
+            # agent SSHing into a sibling container — is preserved as an
+            # explicit user choice via the settings UI, not as a default.
+            "local",
+        ),
+        sandbox_mode=get_default_value(
+            "sandbox_mode",
+            # Spec 01-host-first D2: process-relationship taxonomy.
+            # 'none' = LocalInteractiveSession unchanged (today's behavior).
+            # Docker-mode deployments that previously relied on SSH-into-
+            # container can opt in via 'ssh' or via the legacy
+            # code_exec_ssh_enabled flag (auto-migrated in task 1.5).
+            "none",
+        ),
         websocket_server_restart_enabled=get_default_value("websocket_server_restart_enabled", True),
         uvicorn_access_logs_enabled=get_default_value("uvicorn_access_logs_enabled", False),
         stt_model_size=get_default_value("stt_model_size", "base"),
