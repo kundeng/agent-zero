@@ -24,12 +24,36 @@ Agent Zero uses LiteLLM as its universal LLM gateway, which supports Claude via 
 
 The user also has a proxy LLM at `localhost:8317` (OpenAI-compatible) that can serve Claude models. Both paths must work.
 
+### Relationship to spec 01 (wrapper architecture)
+
+Per spec 01 D9, all net-new code lives under `hyperagent0/`. This spec's home is `hyperagent0/claude_sdk/`:
+
+```
+hyperagent0/claude_sdk/
+├── __init__.py
+├── wrapper.py          # ClaudeSDKWrapper (same interface as LiteLLMChatWrapper)
+├── bridge.py           # Tool schema translator, response mapper, thinking-block extractor
+├── mcp.py              # MCP wiring (Claude SDK native MCP support → Agent Zero MCP handler)
+└── cost.py             # Per-provider token accounting (P2)
+```
+
+**Conflict-surface budget for spec 02**: this spec touches more upstream files than spec 01 because Claude SDK has to plug into the agent loop and the model layer. Patched upstream files:
+
+- `models.py` — register `ClaudeSDKWrapper` as a `chat_model_provider="claude-sdk"` option (small dispatch addition)
+- `agent.py` — handle `thinking` content blocks in the monologue loop (behavior change at an existing call site)
+- `python/helpers/settings.py` — add Claude SDK settings fields (also touched by spec 01 — same patch site)
+- `python/helpers/mcp_handler.py` — bridge to Claude SDK's native MCP (P1 task 1.6)
+- `python/helpers/rate_limiter.py` — per-provider token accounting (P2)
+
+Where extensions can replace patches, prefer extensions per CLAUDE.md ("Extensions over core edits") — task 1.5 should investigate whether the monologue-loop thinking-block handling can be implemented as a `python/extensions/before_main_llm_call/` or `process_chain_end/` extension instead of an in-place patch.
+
 ## Constraints
 
 - Must not break existing LiteLLM provider path
-- `anthropic` Python SDK added to requirements.txt (not `@anthropic-ai/claude-code` which is Node.js)
+- `anthropic` (and `claude-agent-sdk` if used) installed via the `[claude-sdk]` extra per spec 01 D7 — **not** added to base `requirements.txt`. Users opt in: `pip install hyperagent0[claude-sdk]`.
 - Tool schema auto-generated at runtime from Tool class introspection — no manual schema maintenance
 - Extended thinking budget must be configurable and cost-trackable
+- Lazy import: `import anthropic` happens only when `chat_model_provider=claude-sdk` is selected; the base wheel must install and `haz --help` must run without the extra installed
 
 ## Decisions
 
@@ -48,27 +72,33 @@ The user also has a proxy LLM at `localhost:8317` (OpenAI-compatible) that can s
 ## Tasks
 
 ### P1 — Must Do
-- [ ] 1.1 Add `anthropic` to requirements.txt
-- [ ] 1.2 Create `python/helpers/claude_sdk_bridge.py`
-  - Tool schema translator: Tool class → Claude JSON schema
-  - Response mapper: Claude tool_use blocks → Agent Zero tool dispatch
-  - Thinking block extractor
-- [ ] 1.3 Create `ClaudeSDKWrapper` in `models.py`
-  - Implement same interface as `LiteLLMChatWrapper`
-  - Use `anthropic.AsyncAnthropic()` for streaming
-  - Map Agent Zero messages format to/from Claude Messages API format
-  - [src:models.py]
-- [ ] 1.4 Add `claude-sdk` provider settings to `settings.py`
-  - `claude_sdk_thinking_budget`, `claude_sdk_api_key`, `claude_sdk_model`
+- [ ] 1.1 Add `[claude-sdk]` extra to `pyproject.toml`
+  - `[claude-sdk] = ["anthropic>=0.40", "claude-agent-sdk"]` (versions pinned at implementation time)
+  - Confirm base install + `haz --help` work without the extra installed
+  - [src:pyproject.toml]
+- [ ] 1.2 Create `hyperagent0/claude_sdk/bridge.py`
+  - Tool schema translator: `Tool` class → Claude JSON schema (via runtime introspection of kwargs)
+  - Response mapper: Claude `tool_use` blocks → Agent Zero tool dispatch
+  - Thinking-block extractor (returns `(thinking, text, tool_uses)` tuples)
+- [ ] 1.3 Create `hyperagent0/claude_sdk/wrapper.py` (`ClaudeSDKWrapper` class)
+  - Implements the same interface as `LiteLLMChatWrapper`
+  - Uses `anthropic.AsyncAnthropic()` for streaming (lazy import inside `__init__`)
+  - Maps Agent Zero messages format to/from Claude Messages API format
+  - Register in `models.py` with a minimal dispatch patch: when `chat_model_provider == "claude-sdk"`, instantiate `hyperagent0.claude_sdk.wrapper.ClaudeSDKWrapper`
+  - [src:models.py, hyperagent0/claude_sdk/wrapper.py]
+- [ ] 1.4 Add Claude SDK provider settings
+  - Fields: `claude_sdk_thinking_budget`, `claude_sdk_api_key`, `claude_sdk_model`
+  - Co-located with spec 01's `sandbox_mode` field addition in `python/helpers/settings.py` (same patch site, ideally same PR if specs 01 and 02 land together)
   - [src:python/helpers/settings.py]
-- [ ] 1.5 Modify `agent.py` monologue loop to handle thinking blocks
-  - Detect thinking content type in response
-  - Log thinking blocks (visible in UI but not injected back as user content)
-  - Pass text + tool_use to existing processing
-  - [src:agent.py]
+- [ ] 1.5 Handle thinking blocks in the agent monologue
+  - **First preference: extension-based.** Try implementing thinking-block handling as a `python/extensions/before_main_llm_call/` + `process_chain_end/` pair, registering through `python/helpers/extension.py`'s `@extensible` framework.
+  - **Fallback: patch `agent.py` monologue loop.** Only if the extension hooks don't expose enough state. Detect thinking content type in response, log thinking blocks (visible in UI but not injected back as user content), pass text + tool_use to existing processing.
+  - Document the choice in the implementation PR.
+  - [src:python/extensions/ OR agent.py]
 - [ ] 1.6 Wire MCP tools through Claude SDK's native MCP support
-  - Bridge Agent Zero MCP handler → Claude SDK's tool definitions
-  - [src:python/helpers/mcp_handler.py]
+  - Bridge logic in `hyperagent0/claude_sdk/mcp.py`
+  - Minimal patch to `python/helpers/mcp_handler.py`: when active provider is `claude-sdk`, route tool registration through the bridge module
+  - [src:python/helpers/mcp_handler.py, hyperagent0/claude_sdk/mcp.py]
 
 ### P2 — Should Do
 - [ ] 2.1 Test: Claude SDK provider with direct Anthropic API key
@@ -76,8 +106,9 @@ The user also has a proxy LLM at `localhost:8317` (OpenAI-compatible) that can s
 - [ ] 2.3 Test: Tool dispatch round-trip (Claude calls tool → execute → result back)
 - [ ] 2.4 Test: Extended thinking with budget control
 - [ ] 2.5 Integrate cost tracking for Claude SDK (thinking tokens are expensive)
-  - Extend `rate_limiter.py` with per-provider token accounting
-  - [src:python/helpers/rate_limiter.py]
+  - `hyperagent0/claude_sdk/cost.py` implements per-provider token accounting
+  - Minimal patch to `python/helpers/rate_limiter.py`: call out to the cost module for claude-sdk provider
+  - [src:python/helpers/rate_limiter.py, hyperagent0/claude_sdk/cost.py]
 
 ### P3 — Nice to Have
 - [ ] 3.1 UI display for thinking blocks (collapsible in web UI)
@@ -91,3 +122,5 @@ The user also has a proxy LLM at `localhost:8317` (OpenAI-compatible) that can s
 ## Log
 
 **2026-05-20** — Initial spec. Confirmed LiteLLM is the only provider path today (`models.py:LiteLLMChatWrapper`). `mcp` package already in requirements.txt. `anthropic` package needs to be added.
+
+**2026-05-20** — Aligned with spec 01 D9 wrapper architecture. All net-new code moves under `hyperagent0/claude_sdk/` (wrapper, bridge, mcp, cost). `anthropic` is now a `[claude-sdk]` extra (per spec 01 D7), not a base requirement — keeps `pip install hyperagent0` lean. Task 1.5 (thinking blocks) updated to prefer extension-based implementation over an `agent.py` patch, per CLAUDE.md convention. Documented the spec-02 conflict-surface budget: 4 upstream files patched (`models.py`, `agent.py`, `settings.py` (shared with spec 01), `mcp_handler.py`), one more in P2 (`rate_limiter.py`).

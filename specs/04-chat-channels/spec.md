@@ -18,13 +18,36 @@ Agent Zero is web-UI-only. You interact with it through a Flask web app served o
 
 NanoClaw solves this with a channel adapter registry and per-channel routing. Rather than rebuilding NanoClaw's full 25+ channel ecosystem, we build a clean adapter interface and implement three priority channels natively in Python.
 
+### Relationship to spec 01 (wrapper architecture) and spec 03 (daemon)
+
+Per spec 01 D9, all net-new code lives under `hyperagent0/`. This spec's home is `hyperagent0/channels/`:
+
+```
+hyperagent0/channels/
+├── __init__.py             # registry, BaseChannel ABC
+├── base.py                 # InboundMessage, OutboundMessage dataclasses
+├── router.py               # channel→AgentContext mapping (SQLite-backed)
+├── formatter.py            # markdown→platform formatter
+├── config.py               # channel config schema + loader
+├── telegram.py             # python-telegram-bot adapter
+├── slack.py                # slack-bolt adapter (P2)
+└── discord.py              # discord.py adapter (P2)
+```
+
+**Lifecycle (per spec 03 D5/D6).** Channel adapters run as in-process async tasks inside the daemon. `hyperagent0/daemon.py` boots channels at start, drains them on shutdown. Channels are *not* started from `run_ui.py` — that file stays unchanged. If a user runs the legacy `python run_ui.py` directly (not through `haz start`), channels stay off (web UI only).
+
+**Conflict-surface budget for spec 04**: ideally **zero** upstream patches. Channel config lives in a new `hyperagent0/channels/config.py` (or extends spec 01's per-project schema in `project.json`), not in `python/helpers/settings.py`. The `$$secret()` placeholder mechanism is reused as-is (no changes to its implementation).
+
 ## Constraints
 
 - Python async (no Node.js sidecar for Phase 1)
 - Each channel adapter is a standalone async class — can be enabled/disabled independently
 - Channel secrets use Agent Zero's existing `$$secret()` mechanism
 - Message routing must handle concurrent inbound from multiple channels
-- Channel→context mapping must persist across restarts (SQLite)
+- Channel→context mapping must persist across restarts (SQLite at `~/.hyperagent0/channels.db`)
+- Channel-library deps (`python-telegram-bot`, `slack-bolt`, `discord.py`) install via `[telegram]`, `[slack]`, `[discord]`, or `[channels]` extras (spec 01 D7) — not in base `requirements.txt`
+- Lazy imports: a channel module imports its SDK only when its adapter class is instantiated
+- Channels run inside the daemon process (spec 03); they do not start from `run_ui.py`
 
 ## Decisions
 
@@ -47,40 +70,41 @@ NanoClaw solves this with a channel adapter registry and per-channel routing. Ra
 ## Tasks
 
 ### P1 — Must Do
-- [ ] 1.1 Create `python/channels/__init__.py` and `python/channels/base.py`
-  - `BaseChannel` ABC with connect/disconnect/send/on_message
+- [ ] 1.1 Create `hyperagent0/channels/__init__.py` and `hyperagent0/channels/base.py`
+  - `BaseChannel` ABC with `connect()`, `disconnect()`, `send()`, `on_message()` callback
   - `InboundMessage` and `OutboundMessage` dataclasses
   - Channel registry (discover and instantiate enabled channels)
-- [ ] 1.2 Create `python/channels/router.py`
+- [ ] 1.2 Create `hyperagent0/channels/router.py`
   - Map inbound messages to AgentContexts
   - Create new context for new conversations, resume for existing threads
-  - SQLite persistence for channel→context mapping
-- [ ] 1.3 Implement Telegram adapter (`python/channels/telegram.py`)
-  - Uses `python-telegram-bot` library
-  - Bot token from settings/secrets
+  - SQLite persistence at `~/.hyperagent0/channels.db`; schema: `(channel_type, chat_id, context_id, project_name, last_active)`
+  - When creating a new context, activate the project bound to that channel/chat in config (if any)
+- [ ] 1.3 Implement Telegram adapter (`hyperagent0/channels/telegram.py`)
+  - Lazy import: `from telegram import ...` inside the adapter class, not at module top level
+  - Bot token from `$$secret()` placeholder in channel config
   - Allowed users whitelist
   - Thread mapping: Telegram chat_id → AgentContext
-- [ ] 1.4 Create `python/channels/formatter.py`
+- [ ] 1.4 Create `hyperagent0/channels/formatter.py`
   - Markdown → Telegram HTML
-  - Markdown → Slack blocks
-  - Markdown → Discord markdown (mostly passthrough)
+  - Markdown → Slack blocks (placeholder for P2)
+  - Markdown → Discord markdown (mostly passthrough, placeholder for P2)
   - Code block handling for each platform
-- [ ] 1.5 Add channel config section to `settings.py`
-  - Per-channel: enabled, token, allowed_users/channels
-  - [src:python/helpers/settings.py]
-- [ ] 1.6 Wire channel startup into server lifecycle
-  - Start channel adapters when daemon starts
-  - Graceful disconnect on shutdown
-  - [src:run_ui.py]
+- [ ] 1.5 Create `hyperagent0/channels/config.py` for channel configuration
+  - Schema: per-channel `enabled`, `token` (via `$$secret()`), `allowed_users`/`allowed_chats`, `project_binding` (chat → project name)
+  - Loaded from a new `channels.json` or from a `channels` section in existing settings; no patch to `python/helpers/settings.py` if possible
+- [ ] 1.6 Boot channels from the daemon lifecycle
+  - `hyperagent0/daemon.py` (spec 03) starts enabled channel adapters at startup
+  - Graceful disconnect on SIGTERM (uses spec 03 task 1.6 shutdown handler)
+  - Does **not** touch `run_ui.py` — direct `python run_ui.py` runs continue to be web-UI-only
 
 ### P2 — Should Do
-- [ ] 2.1 Implement Slack Socket Mode adapter (`python/channels/slack.py`)
-  - Uses `slack-bolt` library
-  - App token + bot token from settings
+- [ ] 2.1 Implement Slack Socket Mode adapter (`hyperagent0/channels/slack.py`)
+  - Lazy import `slack_bolt`
+  - App token + bot token from channel config
   - Thread mapping: Slack thread_ts → AgentContext
-- [ ] 2.2 Implement Discord adapter (`python/channels/discord.py`)
-  - Uses `discord.py` library
-  - Bot token from settings
+- [ ] 2.2 Implement Discord adapter (`hyperagent0/channels/discord.py`)
+  - Lazy import `discord`
+  - Bot token from channel config
   - Guild/channel allowlists
 - [ ] 2.3 Test: Telegram end-to-end (message → agent → reply)
 - [ ] 2.4 Test: Multi-channel concurrent messages
@@ -100,3 +124,5 @@ NanoClaw solves this with a channel adapter registry and per-channel routing. Ra
 ## Log
 
 **2026-05-20** — Initial spec. Reviewed NanoClaw's channel architecture (two-DB split, channel adapter registry). Decided against Chat SDK bridge for Phase 1 to avoid Node.js sidecar. Three priority adapters: Telegram, Slack, Discord.
+
+**2026-05-20** — Aligned with spec 01 D9 (wrapper architecture) and spec 03 (daemon lifecycle). All channel code moves from `python/channels/` to `hyperagent0/channels/`. Channel startup lives in `hyperagent0/daemon.py`, **not** `run_ui.py` — direct `python run_ui.py` invocations stay web-UI-only. Channel config moves to its own module (`hyperagent0/channels/config.py`) to keep the spec-04 conflict-surface budget at zero upstream patches. Channel-library deps install via spec 01 D7 extras (`[telegram]`, `[slack]`, `[discord]`, or `[channels]` bundle). SQLite mapping DB lives at `~/.hyperagent0/channels.db`.

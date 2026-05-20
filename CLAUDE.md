@@ -79,7 +79,7 @@ specs_root: specs/
 |------|--------|-------------|------------|
 | [01-host-first](specs/01-host-first/spec.md) | DRAFT | Agent runs on host, sandbox only for code exec | — |
 | [02-claude-sdk](specs/02-claude-sdk/spec.md) | DRAFT | Claude Agent SDK as first-class provider alongside LiteLLM | — |
-| [03-daemon-cli](specs/03-daemon-cli/spec.md) | DRAFT | `hyperagent-zero start/stop/status`, systemd, pip install | 01 |
+| [03-daemon-cli](specs/03-daemon-cli/spec.md) | DRAFT | `hyperagent0 start/stop/status` (alias `haz`), systemd, pip install | 01 |
 | [04-chat-channels](specs/04-chat-channels/spec.md) | DRAFT | Telegram, Slack, Discord channel adapters | 01, 03 |
 | [05-project-isolation](specs/05-project-isolation/spec.md) | DRAFT | Per-project cgroup/Docker sandboxing with resource limits | 01 |
 

@@ -23,6 +23,26 @@ Agent Zero has a project model (`.a0proj/`), but projects are **logically** sepa
 
 For a hyperagent harness managing multiple projects, this is unacceptable. A bug in one project's code execution should not crash another. A compromised agent should not exfiltrate data from other projects.
 
+### Relationship to spec 01
+
+Spec 01-host-first established the `sandbox_mode` taxonomy by **process relationship to the agent** and shipped three modes:
+
+| Mode | Process relationship | Owner |
+|------|---------------------|-------|
+| `none` | local subprocess, no wrapper | spec 01 |
+| `sandbox` | local subprocess with OS-level FS/network restrictions (srt) | spec 01 |
+| `ssh` | remote process | spec 01 |
+
+This spec extends the taxonomy with the **isolated-process-tree** modes:
+
+| Mode | Process relationship | Owner |
+|------|---------------------|-------|
+| `cgroup` | local subprocess with cgroup v2 resource limits + mount namespace | spec 05 |
+| `docker` | fresh container — separate process tree, isolated kernel view | spec 05 |
+| `podman` | fresh container via Podman — separate process tree, rootless | spec 05 |
+
+Spec 01 already created the `hyperagent0/sandbox/` package with the `SandboxBackend` ABC, `NoneBackend`, `SandboxBackendSrt`, `SshBackend`, the registry (`get_backend`, `register_backend`), and the per-project `sandbox` block in `project.json` (with mode literal `inherit | none | sandbox | ssh`). This spec **extends** that infrastructure — it does not recreate it.
+
 ## Constraints
 
 - cgroup v2 requires Linux with systemd (Ubuntu 22.04+, Fedora 31+)
@@ -52,35 +72,51 @@ For a hyperagent harness managing multiple projects, this is unacceptable. A bug
 ## Tasks
 
 ### P1 — Must Do
-- [ ] 1.1 Create `python/helpers/sandbox_manager.py`
-  - Abstract `SandboxBackend` ABC: create/destroy/execute/is_alive
-  - `NoneSandbox` implementation (passthrough, subprocess.run)
-  - Backend registry and auto-detection
-- [ ] 1.2 Implement `CgroupSandbox` backend (`python/helpers/sandbox_cgroup.py`)
+
+> **Prerequisite from spec 01:** `hyperagent0/sandbox/` already exists with the `SandboxBackend` ABC, the `register_backend()` / `get_backend()` registry, `NoneBackend`, `SandboxBackendSrt`, and `SshBackend`. `project.json` already has a `sandbox` block. `code_execution_tool.py` already routes through the registry. The tasks below **register new backends and broaden the schema**, not rebuild.
+
+- [ ] 1.1 Broaden mode literal and per-project schema
+  - Extend `ProjectSandboxSettings` mode literal to `inherit | none | sandbox | ssh | cgroup | docker | podman`
+  - Add fields: `resource_limits` (cpus, memory, timeout, disk_quota), `network` (internet | local-only | none | allowlist), `image`, `persist_sandbox`
+  - Existing `resolve_sandbox_mode()` call sites unchanged
+  - [src:python/helpers/projects.py, python/helpers/settings.py]
+- [ ] 1.2 Implement `CgroupBackend` (`hyperagent0/sandbox/cgroup.py`)
+  - Register with the existing `sandbox_manager` registry for `sandbox_mode=cgroup`
   - Use `systemd-run --user --scope` for memory/CPU limits
   - Use `unshare --mount` for mount namespace (project dir only)
   - Session management: sandbox stays alive between execute() calls
   - Resource limits: `MemoryMax`, `CPUQuota`
-- [ ] 1.3 Implement `DockerSandbox` backend (`python/helpers/sandbox_docker.py`)
-  - Lightweight container per project (reuse from spec 01)
-  - Bind-mount project dir RW, knowledge RO
+  - Process relationship: local subprocess (sibling of `sandbox` but kernel-enforced rather than userspace)
+- [ ] 1.3 Implement `DockerBackend` (`hyperagent0/sandbox/docker.py`)
+  - Register with the existing `sandbox_manager` registry for `sandbox_mode=docker`
+  - Spawns a **fresh** container per project (never reuses the agent's container, even in docker-in-docker)
+  - Image from task 1.7 below; bind-mount project dir RW (via `path_translate` from task 1.6), knowledge RO
   - `mem_limit`, `cpus`, `network_mode` from project config
-- [ ] 1.4 Extend `projects.py` with isolation config
-  - Add `isolation` section to project.json schema
-  - Fields: `sandbox_mode`, `resource_limits` (cpus, memory, timeout, disk_quota), `network`, `persist_sandbox`
-  - [src:python/helpers/projects.py]
-- [ ] 1.5 Modify code execution tool to route through sandbox_manager
-  - If active project has `isolation.sandbox_mode != "none"`, use sandbox
-  - Otherwise fall through to existing Local/SSH session
-  - [src:python/tools/code_execution_tool.py]
-- [ ] 1.6 Auto-detect best available backend
-  - Check: systemd + cgroup v2 available? Docker daemon running? Podman available?
-  - Set project default based on detection
-  - Log detected backend on startup
+  - Lazy import: `import docker` happens only when this backend is constructed
+- [ ] 1.4 Implement `PodmanBackend` (`hyperagent0/sandbox/podman.py`)
+  - Rootless containers via Podman; same interface as `DockerBackend`
+  - Register for `sandbox_mode=podman`
+- [ ] 1.5 Auto-detect best available backend
+  - Order: `sandbox` (srt, from spec 01) → `cgroup` → `docker` → `podman` → `none`
+  - Setup wizard suggests the detected mode
+  - Log detected mode on startup
+- [ ] 1.6 Create `hyperagent0/sandbox/path_translate.py` (moved from spec 01)
+  - `to_host(path) -> str`: identity on host mode; in docker mode reads `/proc/self/mountinfo` to map agent-internal paths to host paths
+  - `from_host(path) -> str`: inverse, for surfacing sandbox results back to the agent
+  - Used by `DockerBackend`/`PodmanBackend` volume mounts; not needed by `none`/`sandbox`/`ssh`/`cgroup`
+  - Unit tests with synthetic mountinfo fixtures (no Docker required)
+- [ ] 1.7 Create lightweight sandbox Dockerfile (moved from spec 01)
+  - `docker/sandbox/Dockerfile` — python:3.11-slim + git curl jq
+  - Project dir mounted RW, shared tmp dir
+  - Repo-root `docker/` directory is acceptable; not part of any Python package
+- [ ] 1.8 Add Python extras for container SDKs
+  - `pyproject.toml` extras: `[docker] = ["docker>=7"]`, `[podman] = ["podman>=4"]`
+  - Lazy imports in the respective backends — install error surfaces only when that mode is selected
+  - [src:pyproject.toml]
 
-### P2 — Should Do
-- [ ] 2.1 Implement `PodmanSandbox` backend (`python/helpers/sandbox_podman.py`)
-  - Rootless Podman — same interface as Docker, no daemon
+> **Conflict-surface budget for spec 05**: zero upstream patches in `python/`. All new backends live in `hyperagent0/sandbox/`; the schema extension to `project.json` is via spec 01's `BasicProjectData.sandbox` block (broadened literal only — no new struct).
+
+- [ ] 2.1 (removed — Podman backend promoted to P1 task 1.4)
 - [ ] 2.2 Network isolation modes
   - `internet` (default): full network access
   - `local-only`: can reach localhost services only
@@ -100,10 +136,15 @@ For a hyperagent harness managing multiple projects, this is unacceptable. A bug
 
 ## Open Questions
 
-- [ ] Should sandbox_mode be settable globally AND per-project, with per-project overriding? Yes, likely.
+- [x] Should sandbox_mode be settable globally AND per-project? **Yes** — resolved by spec 01 D5. Global default in `settings.json`, per-project override in `project.json#sandbox`, `inherit` as default project value.
 - [ ] How to handle `pip install` across sessions when sandbox is ephemeral? Document clearly. Offer `persist_sandbox: true` option.
 - [ ] cgroup v2 `unshare --mount` may need user namespace support. Test on major distros.
+- [ ] Should `cgroup` and `sandbox` (srt) collapse into a single `sandbox` mode with a `backend` sub-field (`srt | bwrap | cgroup`)? Both are local subprocesses with kernel/userspace restrictions — same process relationship to the agent. Argument for: cleaner taxonomy. Argument against: cgroup adds resource limits that srt doesn't, and users likely think of them differently. Defer until both backends ship and we see how config files read.
 
 ## Log
 
 **2026-05-20** — Initial spec. Confirmed Agent Zero's project model at `python/helpers/projects.py` — projects are `usr/projects/<name>/.a0proj/`. Code execution is in `python/tools/code_execution_tool.py` with `LocalInteractiveSession` (host PTY) and `SSHInteractiveSession` (Docker SSH). The sandbox_manager bridges between these.
+
+**2026-05-20** — Aligned with spec 01 revisions. Spec 01 now ships `sandbox_manager.py` with the ABC, `NoneBackend`, `SandboxBackendSrt` (for `sandbox_mode=sandbox`), and `SshBackend`; this spec extends with `CgroupBackend`, `DockerBackend`, `PodmanBackend`. Tasks restructured: 1.1 broadens the schema rather than recreating it, 1.6 picks up `path_translate` and 1.7 picks up the sandbox Dockerfile (both moved from spec 01 because they're only consumed by container modes). Updated naming to match spec 01's process-relationship taxonomy (`Backend` suffix for ABC implementations, mode names align with the rename `srt → sandbox`). Surfaced one new open question: whether `cgroup` and `sandbox` should collapse into a single mode with a `backend` sub-field.
+
+**2026-05-20** — Updated all backend paths from `python/helpers/sandbox_*.py` to `hyperagent0/sandbox/*.py` per spec 01 D9 wrapper architecture. Documented the spec-05 conflict-surface budget: zero upstream patches in `python/`. All new backends are additive in `hyperagent0/sandbox/`.
