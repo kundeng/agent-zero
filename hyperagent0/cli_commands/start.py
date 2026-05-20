@@ -79,6 +79,18 @@ def _run_server(host: str | None, port: int | None) -> None:
 
     import run_ui  # type: ignore[import-not-found]
 
+    # Boot channel adapters (spec 04 task 1.6) on a background thread
+    # *before* the (blocking) HTTP server call so they're live by the
+    # time the first request arrives. Import is deferred — direct
+    # ``python run_ui.py`` invocations never load this module, so they
+    # stay web-UI-only as the spec requires.
+    try:
+        from ..channels.lifecycle import start_enabled_channels
+
+        start_enabled_channels()
+    except Exception as exc:
+        click.echo(f"[hyperagent0] channel startup error: {exc}", err=True)
+
     run_ui.start_server(host=host, port=port)
 
 

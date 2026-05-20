@@ -93,6 +93,17 @@ def graceful_shutdown(timeout: float = 25.0) -> None:
         except Exception:  # pragma: no cover - defensive
             pass
 
+    # Phase 2.5: stop chat channels (spec 04 task 1.6). Done before
+    # the HTTP server stop so adapter long-poll loops have a chance to
+    # cancel cleanly. Import is lazy so daemons without channels never
+    # pay for it.
+    try:
+        from hyperagent0.channels.lifecycle import stop_all_channels  # type: ignore
+
+        stop_all_channels(timeout=min(10.0, max(2.0, deadline - time.monotonic())))
+    except Exception as exc:  # pragma: no cover - best-effort cleanup
+        _safe_print(f"could not stop channels cleanly: {exc}")
+
     # Phase 3: stop the HTTP server so uvicorn unwinds cleanly. The
     # existing helper in python/helpers/process.py is the upstream
     # hook for this.
