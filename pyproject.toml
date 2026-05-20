@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hyperagent0"
+version = "0.1.0.dev0"
+description = "HyperAgent Zero — host-first agentic harness (fork of agent0ai/agent-zero)."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11"
+authors = [
+    { name = "HyperAgent Zero contributors" },
+]
+
+# NOTE: Spec 01's worktree owns the canonical base metadata (full deps, console_scripts).
+# This file only declares enough to register the [claude-sdk] extra so spec 02 can land
+# independently. The user will reconcile both pyproject.toml files at merge time.
+dependencies = []
+
+[project.optional-dependencies]
+# Spec 02: opt-in Claude Agent SDK provider. Base wheel does not depend on these;
+# `anthropic` MUST NOT be imported unless chat_model_provider=claude-sdk is selected.
+claude-sdk = [
+    "anthropic>=0.40",
+    "claude-agent-sdk",
+]
+
+[tool.setuptools.packages.find]
+include = ["hyperagent0*"]
+exclude = ["tests*", "docs*", "webui*", "usr*", "logs*", "tmp*"]
