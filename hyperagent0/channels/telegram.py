@@ -85,12 +85,53 @@ class TelegramChannel(BaseChannel):
 
         adapter = self  # closure capture for the handler below
 
+        # Resolve bot identity AFTER initialize() so getMe() has been called.
+        # We store both username (for entity-type='mention') and id (for
+        # entity-type='text_mention') so spec 06 D3 mention detection works.
+        await self._application.initialize()
+        bot = self._application.bot
+        bot_username = (getattr(bot, "username", "") or "").lstrip("@")
+        bot_id = getattr(bot, "id", None)
+        self._bot_username = bot_username
+        self._bot_id = bot_id
+
+        def _detect_is_mention(message: Any) -> bool:
+            """Spec 06 D3: platform-confirmed bot-mention detection.
+
+            Telegram's ``message.entities`` carries structured mention
+            payloads. Two relevant types:
+              * ``mention``       — text mention like ``@your_bot_username``
+              * ``text_mention``  — privacy-mode mention with a ``user``
+                payload pointing at the bot account
+            We check both. Adapter-name regex (the spec-04 fallback)
+            never sees a hit on Telegram bots whose username doesn't
+            match the agent's display name.
+            """
+
+            text = getattr(message, "text", "") or ""
+            entities = getattr(message, "entities", None) or []
+            for ent in entities:
+                etype = getattr(ent, "type", None)
+                if etype == "text_mention":
+                    user = getattr(ent, "user", None)
+                    if user is not None and getattr(user, "id", None) == bot_id:
+                        return True
+                elif etype == "mention" and bot_username:
+                    start = getattr(ent, "offset", 0)
+                    length = getattr(ent, "length", 0)
+                    snippet = text[start : start + length].lstrip("@").lower()
+                    if snippet == bot_username.lower():
+                        return True
+            return False
+
         async def _handle(update: "Update", _ctx: "ContextTypes.DEFAULT_TYPE") -> None:
             message = getattr(update, "effective_message", None)
             if message is None or not getattr(message, "text", None):
                 return
             chat = getattr(update, "effective_chat", None)
             user = getattr(update, "effective_user", None)
+            chat_type = getattr(chat, "type", None) if chat else None
+            is_group = chat_type in ("group", "supergroup", "channel")
             inbound = InboundMessage(
                 channel_type="telegram",
                 chat_id=str(chat.id) if chat is not None else "",
@@ -101,8 +142,10 @@ class TelegramChannel(BaseChannel):
                 text=message.text or "",
                 metadata={
                     "message_id": getattr(message, "message_id", None),
-                    "chat_type": getattr(chat, "type", None) if chat else None,
+                    "chat_type": chat_type,
                 },
+                is_mention=_detect_is_mention(message),
+                is_group=is_group,
             )
             await adapter._dispatch_inbound(inbound)
 
@@ -110,7 +153,8 @@ class TelegramChannel(BaseChannel):
             MessageHandler(filters.TEXT & ~filters.COMMAND, _handle)
         )
 
-        await self._application.initialize()
+        # initialize() was already called above (we needed bot identity for
+        # is_mention detection). Just start the application here.
         await self._application.start()
         # ``updater`` is the polling task; starting it here makes the
         # adapter live.

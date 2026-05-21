@@ -18,10 +18,85 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 import threading
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Network-error detection (spec 06 D4)
+# ---------------------------------------------------------------------------
+
+# Backoff schedule for retry-on-NetworkError around adapter connect().
+# Matches NanoClaw's pattern from src/channels/channel-registry.ts:11.
+_CONNECT_RETRY_DELAYS_S: tuple[float, ...] = (2.0, 5.0, 10.0)
+
+
+def is_network_error(exc: BaseException) -> bool:
+    """Return True iff ``exc`` looks like a transient network failure.
+
+    Used by :func:`start_enabled_channels` to retry adapter ``connect()``
+    on network errors only — misconfigs (bad token, missing intent)
+    still fail fast on the first attempt.
+
+    Detection covers stdlib network exceptions plus per-SDK network
+    exception types when their packages are installed. We do NOT import
+    the SDKs at module top — each SDK's check is gated by a try/except
+    so non-installed channels don't break the helper.
+    """
+
+    # Stdlib transients — fast path, covers ConnectionResetError,
+    # ConnectionRefusedError, ConnectionAbortedError, TimeoutError,
+    # asyncio.TimeoutError, socket.gaierror.
+    if isinstance(
+        exc,
+        (
+            ConnectionError,
+            TimeoutError,
+            asyncio.TimeoutError,
+            socket.gaierror,
+        ),
+    ):
+        return True
+
+    # Telegram
+    try:
+        from telegram.error import NetworkError as _TgNetErr, TimedOut as _TgTimeout  # type: ignore
+
+        if isinstance(exc, (_TgNetErr, _TgTimeout)):
+            return True
+    except Exception:
+        pass
+
+    # Slack
+    try:
+        from slack_sdk.errors import SlackApiError  # type: ignore
+
+        if isinstance(exc, SlackApiError):
+            resp = getattr(exc, "response", None)
+            status = getattr(resp, "status_code", None) if resp is not None else None
+            if status in (429, 502, 503, 504):
+                return True
+    except Exception:
+        pass
+
+    # Discord
+    try:
+        import discord  # type: ignore
+
+        if isinstance(exc, getattr(discord, "ConnectionClosed", tuple())):
+            return True
+        http_exc = getattr(discord, "HTTPException", None)
+        if http_exc is not None and isinstance(exc, http_exc):
+            status = getattr(exc, "status", None)
+            if status in (429, 500, 502, 503, 504):
+                return True
+    except Exception:
+        pass
+
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -163,14 +238,11 @@ def start_enabled_channels() -> None:
                 continue
             _router.register(adapter, cfg)
             _channels[name] = adapter
-            fut = asyncio.run_coroutine_threadsafe(adapter.connect(), _loop)
-            try:
-                fut.result(timeout=30)
-                logger.info("channel %s started", name)
-            except Exception:
-                logger.exception(
-                    "channel %s connect failed; leaving it offline", name
-                )
+            if not _connect_with_retry(adapter, name):
+                # Already logged inside the helper. Leave adapter offline;
+                # the daemon keeps running so other channels can come up.
+                continue
+            logger.info("channel %s started", name)
 
         _started = True
 
@@ -226,3 +298,59 @@ def get_router() -> Any:
     """
 
     return _router
+
+
+# ---------------------------------------------------------------------------
+# Internal — retry helper (spec 06 D4)
+# ---------------------------------------------------------------------------
+
+
+def _connect_with_retry(adapter: Any, name: str) -> bool:
+    """Call ``adapter.connect()`` on the channels loop with retry.
+
+    Returns True on success, False if the adapter is still offline after
+    exhausting the retry schedule. Only retries on network failures
+    (see :func:`is_network_error`) — misconfigs fail fast.
+    """
+
+    if _loop is None:  # pragma: no cover - defensive
+        return False
+
+    schedule = (0.0,) + _CONNECT_RETRY_DELAYS_S  # first attempt has no delay
+    last_exc: Optional[BaseException] = None
+    for attempt, delay in enumerate(schedule):
+        if delay > 0:
+            # Sleep on the lifecycle thread, not the channels loop —
+            # this is sync code in the daemon's startup path.
+            import time as _time
+
+            logger.warning(
+                "channel %s connect failed (attempt %d) with network error; "
+                "retrying in %.1fs",
+                name,
+                attempt,
+                delay,
+            )
+            _time.sleep(delay)
+
+        fut = asyncio.run_coroutine_threadsafe(adapter.connect(), _loop)
+        try:
+            fut.result(timeout=30)
+            return True
+        except Exception as exc:
+            last_exc = exc
+            if not is_network_error(exc):
+                logger.exception(
+                    "channel %s connect failed; leaving it offline (not retryable)",
+                    name,
+                )
+                return False
+            # Otherwise loop to the next delay.
+
+    logger.error(
+        "channel %s connect failed after %d retries; leaving it offline: %s",
+        name,
+        len(_CONNECT_RETRY_DELAYS_S),
+        last_exc,
+    )
+    return False

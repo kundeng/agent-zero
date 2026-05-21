@@ -1,40 +1,21 @@
-"""Channel → AgentContext router (spec 04, task 1.2).
+"""Channel → AgentContext router (spec 04, restructured by spec 06).
 
-Inbound messages from any channel arrive at
-:meth:`ChannelRouter.handle_inbound`. The router:
+Inbound messages from any channel arrive via the
+:class:`hyperagent0.channels.base.ChannelSetup` contract that the
+router implements. The router:
 
 1. Validates the sender against the channel's allow-list.
-2. Looks up the persistent ``(channel_type, chat_id) → context_id``
-   mapping in SQLite (``~/.hyperagent0/channels.db``).
-3. Resumes the existing :class:`agent.AgentContext` if one is live, or
-   creates a fresh one (activating the channel-bound project if the
-   channel config has one).
-4. Dispatches the message via ``context.communicate(...)``.
-5. After the agent finishes, ships the reply back via the originating
-   channel adapter.
-
-Persistence design
-------------------
-The SQLite schema is intentionally tiny:
-
-.. code-block:: sql
-
-   CREATE TABLE thread_map (
-     channel_type TEXT NOT NULL,
-     chat_id      TEXT NOT NULL,
-     context_id   TEXT NOT NULL,
-     project_name TEXT,
-     last_active  REAL NOT NULL,
-     PRIMARY KEY (channel_type, chat_id)
-   );
-
-Only the durable mapping lives here; full conversation state stays in
-the agent's normal persistence layer (``persist_chat``). On daemon
-restart, looking up an old ``context_id`` may return a stale
-identifier whose :class:`AgentContext` is gone — we treat that as
-"create new" rather than try to rehydrate the chat log. That trade-off
-is called out as an open question in the spec; full resume lands with
-P2 task 2.5.
+2. Honors ``require_mention`` (spec 06 D3) for groups.
+3. Looks up the persistent ``(channel_type, chat_id) → context_id``
+   mapping in SQLite (``~/.hyperagent0/channels.db``), upgrading the
+   schema via the migrator (spec 06 D6) on first open.
+4. Resumes the existing :class:`agent.AgentContext` if one is live, or
+   creates a fresh one (activating the channel-bound project; applying
+   the channel's ``sandbox_override`` per spec 06 D5).
+5. Dispatches the message via ``context.communicate(...)``.
+6. After the agent finishes, ships the reply back via the originating
+   channel adapter — or via ``event.reply_to`` if the inbound carried
+   an override (spec 06 D1).
 """
 
 from __future__ import annotations
@@ -48,9 +29,17 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
-from .base import BaseChannel, InboundMessage, OutboundMessage
+from .base import (
+    BaseChannel,
+    ChannelSetup,
+    DeliveryAddress,
+    InboundEvent,
+    InboundMessage,
+    OutboundMessage,
+)
 from .config import ChannelConfig
 from .formatter import format_for_channel
+from .migrations.migrator import Migrator
 
 if TYPE_CHECKING:  # pragma: no cover - import-cycle guard
     from agent import AgentContext
@@ -68,12 +57,11 @@ def default_db_path() -> Path:
 
 
 class ThreadStore:
-    """Thin SQLite wrapper for the (channel, chat) → context mapping.
+    """SQLite wrapper for the (channel, chat) → context mapping.
 
-    The instance owns a single connection guarded by a lock so it can be
-    used from multiple adapter coroutines safely (SQLite is happy with
-    serialized access across threads as long as the connection is
-    shared with ``check_same_thread=False``).
+    Spec 06: schema management moved into :class:`Migrator` (numbered
+    .sql files in ``migrations/``). Construction applies any pending
+    migrations idempotently.
     """
 
     def __init__(self, db_path: Optional[Path] = None) -> None:
@@ -82,25 +70,7 @@ class ThreadStore:
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
-        self._ensure_schema()
-
-    def _ensure_schema(self) -> None:
-        with self._lock:
-            self._conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS thread_map (
-                    channel_type TEXT NOT NULL,
-                    chat_id      TEXT NOT NULL,
-                    context_id   TEXT NOT NULL,
-                    project_name TEXT,
-                    last_active  REAL NOT NULL,
-                    PRIMARY KEY (channel_type, chat_id)
-                );
-                CREATE INDEX IF NOT EXISTS idx_thread_context
-                    ON thread_map(context_id);
-                """
-            )
-            self._conn.commit()
+        Migrator(self._conn, lock=self._lock).upgrade()
 
     def get(self, channel_type: str, chat_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -189,12 +159,17 @@ class ThreadStore:
 ReplyFactory = Callable[[InboundMessage, BaseChannel, Optional[str]], Any]
 
 
-class ChannelRouter:
+class ChannelRouter(ChannelSetup):
     """Routes inbound channel messages to AgentContexts and back.
 
-    The router is created once by the daemon. Each adapter sets the
-    router's bound callback as its ``on_message`` handler before
+    The router is created once by the daemon. Each adapter is handed a
+    reference to this router via :meth:`BaseChannel.setup` before
     :meth:`BaseChannel.connect` returns.
+
+    Spec 06: :class:`ChannelRouter` implements :class:`ChannelSetup`
+    directly, so adapters call ``self._channel_setup.on_inbound(...)``
+    etc. The legacy ``register(channel)`` method still wires up the
+    spec-04 ``on_message`` callback for older adapter code.
     """
 
     def __init__(
@@ -217,20 +192,135 @@ class ChannelRouter:
     def register(
         self, channel: BaseChannel, config: Optional[ChannelConfig] = None
     ) -> None:
-        """Attach a channel adapter. Wires up ``on_message``."""
+        """Attach a channel adapter.
+
+        Wires both the spec-06 :class:`ChannelSetup` path (preferred)
+        and the spec-04 ``on_message`` callback (legacy) so adapters
+        that haven't migrated still get inbound dispatch.
+        """
 
         self.channels[channel.channel_type] = channel
         if config is not None:
             self.channel_configs[channel.channel_type] = config
-        channel.on_message = self.handle_inbound
+        channel.setup(self)
+        channel.on_message = self.handle_inbound  # legacy path
 
     # ------------------------------------------------------------------
-    # Inbound handling
+    # ChannelSetup implementation (spec 06 D2)
+    # ------------------------------------------------------------------
+
+    async def on_inbound(
+        self,
+        platform_id: str,
+        thread_id: Optional[str],
+        message: InboundMessage,
+    ) -> None:
+        await self.handle_inbound(message)
+
+    async def on_inbound_event(self, event: InboundEvent) -> None:
+        """Routing-aware path — honors ``event.reply_to`` override."""
+
+        await self._handle_inbound_impl(event.message, reply_to=event.reply_to)
+
+    async def on_metadata(
+        self,
+        platform_id: str,
+        *,
+        name: Optional[str] = None,
+        is_group: Optional[bool] = None,
+    ) -> None:
+        # Best-effort: refresh last_active so the chat doesn't look stale.
+        # Channel-name persistence can be added in a future migration.
+        # We don't know the channel_type here without context; the
+        # touch is a no-op when no row exists.
+        if not platform_id:
+            return
+        for ct in list(self.channels.keys()):
+            self.store.touch(ct, platform_id)
+
+    async def on_action(
+        self,
+        question_id: str,
+        selected_option: str,
+        user_id: str,
+    ) -> None:
+        """Inject a button click as a user message into the agent.
+
+        Spec 06 D7 / open question: no upstream patch needed — we route
+        the click through the standard :meth:`AgentContext.communicate`
+        public API as a synthetic user message. ``question_id`` is the
+        opaque token the original ask-question card embedded; we don't
+        need to interpret it here, the agent's monologue does.
+        """
+
+        # Find an existing AgentContext that has issued this question_id.
+        # For v1 we don't track question_id → context mapping; the
+        # router scans live contexts. If none match, log + drop.
+        ctx = self._find_context_with_question(question_id)
+        if ctx is None:
+            logger.info(
+                "on_action: no live AgentContext owns question %s; dropping",
+                question_id,
+            )
+            return
+        try:
+            from agent import UserMessage  # type: ignore
+        except Exception as exc:
+            logger.error("agent.UserMessage not importable: %s", exc)
+            return
+        synthetic_text = (
+            f"[action] user {user_id} selected: {selected_option}"
+        )
+        try:
+            ctx.communicate(UserMessage(message=synthetic_text))
+        except Exception:
+            logger.exception("on_action communicate() failed")
+
+    def _find_context_with_question(self, question_id: str) -> Optional["AgentContext"]:
+        """Best-effort scan of live AgentContexts looking for ``question_id``.
+
+        Upstream doesn't expose a question-id → context index, so we
+        fall back to inspecting each live context's log for an entry
+        marked with this id. This is O(contexts × log) and good enough
+        for v1 of the on_action plumbing.
+        """
+
+        try:
+            from agent import AgentContext  # type: ignore
+        except Exception:
+            return None
+        contexts = getattr(AgentContext, "all", None)
+        if callable(contexts):
+            try:
+                live = list(contexts())
+            except Exception:
+                live = []
+        else:
+            live = []
+        for ctx in live:
+            log = getattr(ctx, "log", None)
+            items = getattr(log, "logs", None) or []
+            for item in items:
+                kvps = getattr(item, "kvps", None) or {}
+                if kvps.get("question_id") == question_id:
+                    return ctx
+        return None
+
+    # ------------------------------------------------------------------
+    # Inbound handling (used by both new and legacy paths)
     # ------------------------------------------------------------------
 
     async def handle_inbound(self, msg: InboundMessage) -> None:
-        """Process a single inbound message end-to-end."""
+        """Process a single inbound message end-to-end (legacy entry point)."""
 
+        await self._handle_inbound_impl(msg, reply_to=None)
+
+    async def _handle_inbound_impl(
+        self,
+        msg: InboundMessage,
+        *,
+        reply_to: Optional[DeliveryAddress],
+    ) -> None:
         cfg = self.channel_configs.get(msg.channel_type)
         if cfg is not None:
             if not cfg.is_user_allowed(msg.user_id):
@@ -243,6 +333,19 @@ class ChannelRouter:
             if not cfg.is_chat_allowed(msg.chat_id):
                 logger.info(
                     "channel %s rejected chat %s (not in allow-list)",
+                    msg.channel_type,
+                    msg.chat_id,
+                )
+                return
+            # Spec 06 D3: require_mention enforces platform-confirmed
+            # mention in groups. DMs (is_group=False) always pass.
+            if (
+                cfg.require_mention
+                and msg.is_group
+                and not msg.is_mention
+            ):
+                logger.debug(
+                    "channel %s chat %s: group msg without mention; ignored",
                     msg.channel_type,
                     msg.chat_id,
                 )
@@ -264,7 +367,7 @@ class ChannelRouter:
                 )
                 return
             if reply:
-                await self._send_reply(msg, str(reply))
+                await self._send_reply(msg, str(reply), reply_to=reply_to)
             self.store.upsert(
                 msg.channel_type, msg.chat_id, context_id_hint or "test", None
             )
@@ -287,7 +390,7 @@ class ChannelRouter:
 
         reply_text = await self._dispatch_to_context(context, msg)
         if reply_text:
-            await self._send_reply(msg, reply_text)
+            await self._send_reply(msg, reply_text, reply_to=reply_to)
 
     # ------------------------------------------------------------------
     # Context lifecycle
@@ -299,7 +402,12 @@ class ChannelRouter:
         cfg: Optional[ChannelConfig],
         existing: Optional[Dict[str, Any]],
     ) -> tuple[Optional["AgentContext"], Optional[str]]:
-        """Return (context, project_name). Imports agent lazily."""
+        """Return (context, project_name). Imports agent lazily.
+
+        Spec 06 D5: after project activation, apply
+        ``cfg.sandbox_override`` to the new context's AgentConfig so
+        the code-execution path picks it up.
+        """
 
         try:
             from agent import AgentContext  # type: ignore
@@ -342,20 +450,36 @@ class ChannelRouter:
                 )
                 project_name = None
 
+        # Spec 06 D5: apply channel-level sandbox override AFTER project
+        # activation, so it wins regardless of project defaults.
+        if cfg is not None and cfg.sandbox_override is not None:
+            self._apply_sandbox_override(ctx, cfg.sandbox_override)
+
         return ctx, project_name
+
+    def _apply_sandbox_override(
+        self, ctx: "AgentContext", override: Dict[str, Any]
+    ) -> None:
+        mode = override.get("mode")
+        if not mode or mode == "inherit":
+            return
+        cfg = getattr(ctx, "config", None)
+        if cfg is None:
+            return
+        # Spec 01 stashes sandbox_mode in AgentConfig.additional to keep
+        # agent.py off the patch list. Same pattern here.
+        additional = getattr(cfg, "additional", None)
+        if isinstance(additional, dict):
+            additional["sandbox_mode"] = mode
+            logger.info(
+                "channel sandbox override applied: %s for context %s",
+                mode,
+                getattr(ctx, "id", "?"),
+            )
 
     async def _dispatch_to_context(
         self, context: "AgentContext", msg: InboundMessage
     ) -> Optional[str]:
-        """Hand the inbound to the agent and wait for the monologue to finish.
-
-        Returns the agent's final reply text (or ``None`` if we couldn't
-        capture one). We use ``context.communicate`` which schedules
-        the monologue on the context's ``DeferredTask``; we then poll
-        the task until it finishes, with a generous ceiling so a long
-        agent run doesn't block the adapter loop forever.
-        """
-
         try:
             from agent import UserMessage  # type: ignore
         except Exception as exc:
@@ -368,10 +492,6 @@ class ChannelRouter:
             logger.exception("communicate() raised: %s", exc)
             return None
 
-        # Wait for the monologue to finish without blocking the event
-        # loop. Cap at 10 minutes — agents that take longer are
-        # expected to send intermediate replies via the proactive-send
-        # path (open question 3 in the spec).
         deadline = time.monotonic() + 600
         while task is not None and task.is_alive():
             if time.monotonic() > deadline:
@@ -383,9 +503,6 @@ class ChannelRouter:
                 return None
             await asyncio.sleep(0.25)
 
-        # The agent's final answer is stored on the task result. We
-        # fall back to scanning the log for the most recent ``response``
-        # entry if the task did not return a string directly.
         result = None
         try:
             result = task.result() if task is not None else None  # type: ignore[union-attr]
@@ -412,7 +529,46 @@ class ChannelRouter:
     # Outbound
     # ------------------------------------------------------------------
 
-    async def _send_reply(self, inbound: InboundMessage, text: str) -> None:
+    async def _send_reply(
+        self,
+        inbound: InboundMessage,
+        text: str,
+        *,
+        reply_to: Optional[DeliveryAddress] = None,
+    ) -> None:
+        """Send the agent's reply.
+
+        Spec 06 D1: if ``reply_to`` is provided (admin-transport path),
+        deliver to that address — possibly a different channel — and
+        skip the original inbound's metadata-based reply-threading.
+        """
+
+        if reply_to is not None:
+            target_channel = self.channels.get(reply_to.channel_type)
+            if target_channel is None:
+                logger.error(
+                    "reply_to channel %s has no adapter; falling back to inbound",
+                    reply_to.channel_type,
+                )
+            else:
+                outbound = OutboundMessage(
+                    chat_id=reply_to.platform_id,
+                    text=text,
+                    reply_to=reply_to.thread_id,
+                    metadata={
+                        "formatted": format_for_channel(text, reply_to.channel_type)
+                    },
+                )
+                try:
+                    await target_channel.send(outbound)
+                    return
+                except Exception:
+                    logger.exception(
+                        "reply_to send failed (%s/%s)",
+                        reply_to.channel_type,
+                        reply_to.platform_id,
+                    )
+
         channel = self.channels.get(inbound.channel_type)
         if channel is None:
             logger.error(

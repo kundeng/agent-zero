@@ -83,6 +83,17 @@ class DiscordChannel(BaseChannel):
                 and channel_id not in adapter._allowed_channels
             ):
                 return
+            # Spec 06 D3: platform-confirmed mention check.
+            bot_user = getattr(self._client, "user", None)
+            is_mention = False
+            if bot_user is not None:
+                mentions = getattr(message, "mentions", None) or []
+                is_mention = any(
+                    getattr(m, "id", None) == bot_user.id for m in mentions
+                )
+            # is_group: Discord DMs use a Channel of type=DMChannel.
+            channel_type = type(message.channel).__name__
+            is_group = channel_type not in ("DMChannel", "GroupChannel")
             inbound = InboundMessage(
                 channel_type="discord",
                 chat_id=channel_id,
@@ -94,6 +105,8 @@ class DiscordChannel(BaseChannel):
                     "guild_id": guild_id,
                     "channel_id": channel_id,
                 },
+                is_mention=is_mention,
+                is_group=is_group,
             )
             await adapter._dispatch_inbound(inbound)
 

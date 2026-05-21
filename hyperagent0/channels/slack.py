@@ -37,6 +37,8 @@ class SlackChannel(BaseChannel):
         self._client: Any = None
         self._task: Optional[asyncio.Task] = None
         self._stopped = False
+        # Resolved at connect() via auth.test for spec 06 D3 mention detection.
+        self._bot_user_id: Optional[str] = None
 
     async def connect(self) -> None:
         try:
@@ -62,23 +64,49 @@ class SlackChannel(BaseChannel):
         self._client = self._app.client
         adapter = self
 
-        @self._app.event("message")
-        async def _on_message(event, _say) -> None:
-            # Ignore bot/system messages.
-            if event.get("subtype") is not None:
-                return
+        # Resolve our bot user_id once for spec 06 D3 mention detection.
+        try:
+            auth = await self._client.auth_test()
+            self._bot_user_id = str(auth.get("user_id", "") or "")
+        except Exception:
+            logger.warning("slack auth_test failed; is_mention via app_mention only")
+
+        def _make_inbound(event: dict, *, is_mention: bool) -> InboundMessage:
             chat_id = event.get("thread_ts") or event.get("ts") or ""
-            inbound = InboundMessage(
+            channel = event.get("channel") or ""
+            # Slack channel types: "C..." (public), "G..." (private group),
+            # "D..." (DM). Anything not D is a group/multi-user context.
+            is_group = bool(channel) and not str(channel).startswith("D")
+            return InboundMessage(
                 channel_type="slack",
                 chat_id=str(chat_id),
                 user_id=str(event.get("user", "")),
                 text=str(event.get("text", "") or ""),
                 metadata={
-                    "channel": event.get("channel"),
+                    "channel": channel,
                     "ts": event.get("ts"),
                     "thread_ts": event.get("thread_ts"),
                 },
+                is_mention=is_mention,
+                is_group=is_group,
             )
+
+        @self._app.event("app_mention")
+        async def _on_app_mention(event, _say) -> None:
+            # Direct platform-confirmed mention — D3 happy path.
+            inbound = _make_inbound(event, is_mention=True)
+            await adapter._dispatch_inbound(inbound)
+
+        @self._app.event("message")
+        async def _on_message(event, _say) -> None:
+            # Ignore bot/system messages.
+            if event.get("subtype") is not None:
+                return
+            # If our bot's user_id appears in the text payload as a
+            # ``<@UXXXXXX>`` token, that's also a mention.
+            text = str(event.get("text", "") or "")
+            mention = bool(self._bot_user_id) and f"<@{self._bot_user_id}>" in text
+            inbound = _make_inbound(event, is_mention=mention)
             await adapter._dispatch_inbound(inbound)
 
         self._handler = AsyncSocketModeHandler(self._app, app_token)
