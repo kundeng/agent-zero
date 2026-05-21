@@ -8,10 +8,8 @@
     // Set import root for JS/TS
     "javascript.preferences.importModuleSpecifier": "relative",
     "js/ts.implicitProjectConfig.checkJs": true,
-    "jsconfig.paths": {
-        "*": ["webui/*"]
-    },
-    // Optional: point VSCode to jsconfig.json if you add one
-    "jsconfig.json": "${workspaceFolder}/jsconfig.json",
+    // VS Code auto-discovers webui/jsconfig.json — no explicit reference
+    // needed here (was at the repo root, moved to webui/ to reduce root
+    // clutter).
     "postman.settings.dotenv-detection-notification-visibility": false
 }

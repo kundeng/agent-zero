@@ -52,6 +52,12 @@ all = [
     "slack-bolt>=1.18",
     "discord.py>=2.3",
 ]
+# Test + lint dependencies. ``pip install -e .[dev]`` for contributors.
+dev = [
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.2.0",
+    "pytest-mock>=3.15.1",
+]
 
 [project.scripts]
 # Two binaries, same Click group. See spec 03 D5 (lazy subcommand loading).
@@ -86,8 +92,9 @@ exclude = ["tests*", "logs*", "tmp*", "usr*", "webui*", "docker*", "docs*"]
 # step is independently resolved) lets the newer openai override the older
 # transitive pin. We bundle only requirements.txt here; users / packagers
 # install requirements2.txt as a second step. See specs/01-host-first
-# log entries for the long-form discussion.
-dependencies = { file = ["requirements.txt", "requirements-hyperagent0.txt"] }
+# log entries for the long-form discussion. Our wrapper's own deps (click)
+# live in a clearly-marked block at the bottom of requirements.txt.
+dependencies = { file = ["requirements.txt"] }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

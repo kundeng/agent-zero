@@ -50,3 +50,7 @@ pywinpty==3.0.2; sys_platform == "win32"
 python-socketio>=5.14.2
 uvicorn>=0.38.0
 wsproto>=1.2.0
+
+# === hyperagent0 fork additions (not in upstream) ===
+# Kept at the bottom so cherry-picks from upstream rarely touch this block.
+click>=8.1
