@@ -148,7 +148,7 @@ def _daemonize(log_path: Path) -> None:
     type=int,
     default=None,
     metavar="PORT",
-    help="Bind port (default: settings/env WEB_UI_PORT).",
+    help="Bind port (default: WEB_UI_PORT env var, else 50080).",
 )
 def command(daemonize: bool, systemd: bool, host: str | None, port: int | None) -> None:
     """Launch the hyperagent0 daemon (web UI + agent runtime).
@@ -157,6 +157,13 @@ def command(daemonize: bool, systemd: bool, host: str | None, port: int | None) 
     detach into a background daemon, or ``--systemd`` when running
     under a systemd unit.
     """
+
+    # Standardize on port 50080 across host and container installs.
+    # Upstream's run_ui defaults to 5000; overriding here keeps the
+    # README's "open http://localhost:50080" advice consistent
+    # regardless of how the user installed.
+    if port is None:
+        port = int(os.environ.get("WEB_UI_PORT", "50080"))
 
     if daemonize and systemd:
         raise click.UsageError("--daemon and --systemd are mutually exclusive.")

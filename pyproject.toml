@@ -81,8 +81,16 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["hyperagent0*", "python*"]
-exclude = ["tests*", "logs*", "tmp*", "usr*", "webui*", "docker*", "docs*"]
+# Only ship our wrapper package in the wheel. The upstream ``python/``
+# package MUST NOT be bundled: its code does
+# ``Path(__file__).parent.parent / "conf"`` to find runtime assets, so a
+# copy in site-packages would resolve to site-packages/conf/ (empty).
+# Instead, install.sh clones the repo to ~/.hyperagent0/repo and drops
+# a .pth file that puts that path on sys.path, so the live ``python/``
+# package the daemon imports is the one in the repo — with conf/,
+# prompts/, agents/, knowledge/, ... reachable as siblings.
+include = ["hyperagent0*"]
+exclude = ["tests*", "logs*", "tmp*", "usr*", "webui*", "docker*", "docs*", "python*"]
 
 [tool.setuptools.dynamic]
 # Upstream split requirements into requirements.txt + requirements2.txt
