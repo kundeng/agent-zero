@@ -12,9 +12,22 @@
 #     result = api.run(query)
 #     return result
 
-from duckduckgo_search import DDGS
+# hyperagent0: lazy-import to keep the optional `duckduckgo-search` (and its
+# transitive Rust dep `pyreqwest-impersonate`) off the base install. Upstream
+# pulls this in for an optional knowledge_tool path; hyperagent0 ships without
+# it by default. If users want DDG search, they install:
+#   pip install duckduckgo-search
+# Calling search() without it raises ImportError with a clear hint.
+
 
 def search(query: str, results = 5, region = "wt-wt", time="y") -> list[str]:
+    try:
+        from duckduckgo_search import DDGS
+    except ImportError as exc:  # pragma: no cover - env dependent
+        raise ImportError(
+            "duckduckgo-search not installed. To enable DDG knowledge_tool "
+            "search, run: pip install duckduckgo-search"
+        ) from exc
 
     ddgs = DDGS()
     src = ddgs.text(
