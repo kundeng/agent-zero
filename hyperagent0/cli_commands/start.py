@@ -144,19 +144,31 @@ def _daemonize(log_path: Path) -> None:
     help="Bind host (default: localhost or WEB_UI_HOST env).",
 )
 @click.option(
+    "--lan",
+    is_flag=True,
+    default=False,
+    help="Shortcut for --host 0.0.0.0 — bind on every interface so the UI is reachable from the LAN.",
+)
+@click.option(
     "--port",
     type=int,
     default=None,
     metavar="PORT",
     help="Bind port (default: WEB_UI_PORT env var, else 50080).",
 )
-def command(daemonize: bool, systemd: bool, host: str | None, port: int | None) -> None:
+def command(daemonize: bool, systemd: bool, host: str | None, lan: bool, port: int | None) -> None:
     """Launch the hyperagent0 daemon (web UI + agent runtime).
 
     Default is foreground — ``Ctrl-C`` stops cleanly. Pass ``-d`` to
     detach into a background daemon, or ``--systemd`` when running
     under a systemd unit.
     """
+
+    # --lan resolves before --host so an explicit --host still wins.
+    if lan and host is None:
+        host = "0.0.0.0"
+    if lan and host not in (None, "0.0.0.0"):
+        raise click.UsageError("--lan and --host are mutually exclusive.")
 
     # Standardize on port 50080 across host and container installs.
     # Upstream's run_ui defaults to 5000; overriding here keeps the

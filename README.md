@@ -102,16 +102,35 @@ and restarts on host reboot.
 
 ```text
 haz start           # launch the daemon (foreground; -d to background, --systemd for unit)
+                    #   --lan        bind on 0.0.0.0 so the UI is reachable from the LAN
+                    #   --host HOST  pick a specific bind address
+                    #   --port PORT  override the default of 50080
 haz stop            # graceful shutdown
 haz restart         # stop + start
-haz status          # PID / uptime / port — does NOT import LiteLLM, stays fast
+haz status          # PID / uptime / port - does NOT import LiteLLM, stays fast
 haz logs            # tail ~/.hyperagent0/logs/daemon.log
+haz check           # ping the configured LLM, report OK + latency (or a diagnosis)
 haz setup           # OPTIONAL: interactive settings wizard (you can just use the UI)
-haz config          # print or edit usr/settings.json fields from the CLI
+haz config          # get / set / path - read or write usr/settings.json fields
 ```
 
 Both `haz` and `hyperagent0` are registered and behave identically. The
 group is lazy-loaded so `--help` and `status` stay under 200ms.
+
+**LAN access**: by default the daemon binds to `127.0.0.1`. To reach
+the UI from another machine on your network:
+
+```bash
+haz stop                   # if it's running
+haz start -d --lan         # binds to 0.0.0.0
+# Then visit http://<this-host's-IP>:50080 from anywhere on the LAN.
+```
+
+**Sanity check the LLM** after you configure it in the UI:
+
+```bash
+haz check                  # OK (0.42s) — openai/cc/claude-sonnet-4-6 responded.
+```
 
 ---
 

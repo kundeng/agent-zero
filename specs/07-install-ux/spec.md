@@ -226,13 +226,15 @@ spec-tracked ways.
 - [ ] 1.1 Docker image SHOULD honor `WEB_UI_HOST=0.0.0.0` so the
        compose deployment reaches the LAN. (`haz start --systemd
        --host 0.0.0.0` already does this; verify env var path.)
-- [ ] 1.2 Host install: surface a similar `--host 0.0.0.0` for users
-       who want LAN access from the moment of install — perhaps via
-       a `--lan` flag on `install.sh` that writes the bind host to
-       settings.json, or just document the override.
-- [ ] 1.3 `haz check` subcommand: ping the configured LLM, return
-       exit 0/1, print a one-line diagnosis. Closes the "is my
-       install actually working?" loop for journeys B and C.
+- [x] 1.2 `haz start --lan` — shortcut for `--host 0.0.0.0`. Same
+       effect, less typing, discoverable from `haz start --help`.
+       Documented in README's "LAN access" subsection.
+- [x] 1.3 `haz check` subcommand: reads settings.json, makes a
+       minimal LiteLLM call, prints OK + latency or a one-line
+       diagnosis. Exit codes 0/1/2/3/4 cover reachable / no config
+       / missing field / network-or-auth fail / unsupported
+       provider. claude-sdk path stubbed (exit 4) until spec 02
+       adds a real probe.
 - [ ] 1.4 Test: end-to-end curl|bash install in CI (GitHub Actions
        Ubuntu runner). Replays journey B without LLM keys, asserts
        UI returns 200 on /. Catches regressions of D4.
@@ -310,3 +312,16 @@ from the wheel and clarifying that the repo clone is load-bearing for
 runtime asset resolution. Verified the full flow against the public
 GitHub URL in a multipass Ubuntu 22.04 VM: curl → install → `haz start
 -d` → UI returns 200 on `http://localhost:50080/`.
+
+**2026-05-21** — Landed P1.2 (`haz start --lan` flag) and P1.3
+(`haz check` subcommand). `--lan` is a one-line shortcut for
+`--host 0.0.0.0`; mutually exclusive with explicit `--host` to
+avoid silently overriding a user's intent. `haz check` reads
+`usr/settings.json` and makes a minimal LiteLLM round-trip with
+`max_tokens=8`, exiting 0 with a one-line "OK (Xs)" on success or
+a nonzero code + diagnosis on failure (1 = no config, 2 = missing
+field, 3 = LLM error, 4 = unsupported provider). 8 unit tests
+cover the no-network code paths (settings missing, fields missing,
+flag overrides, provider name prefix logic). Heavy LiteLLM imports
+are deferred into the command body so `haz check --help` still
+satisfies the cold-start budget (only Click is imported).
