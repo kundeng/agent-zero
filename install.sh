@@ -12,11 +12,18 @@
 #   ./install.sh --dev          # editable install pointing at this checkout
 #
 # Flags:
-#   --dev                 Install -e from the current directory (developer mode).
+#   --dev                 Use the current directory as the source (developer mode).
+#                         Same effect as the default flow but skips the git clone
+#                         and uses the cwd as REPO_DIR.
 #   --prefix DIR          Install under DIR/ (default: ~/.hyperagent0).
 #   --branch NAME         Clone this branch (default: v2-hyperagent).
 #   --no-link             Skip the ~/.local/bin/haz symlink.
 #   --extras LIST         Comma list of pip extras (default: all).
+#
+# hyperagent0 is always installed editable (``pip install -e``) against
+# REPO_DIR. That means a future ``git pull`` of REPO_DIR upgrades the
+# installed package without a reinstall step — re-running the curl|bash
+# one-liner just fast-forwards the repo and exits.
 #
 # What gets installed:
 #
@@ -168,18 +175,21 @@ echo "==> [3/5] CPU torch (this is the big download, ~200MB)"
     torch==2.4.0 torchvision==0.19.0 \
     --index-url https://download.pytorch.org/whl/cpu
 
-echo "==> [4/5] hyperagent0 + extras [${EXTRAS}] (this takes a few minutes)"
+echo "==> [4/5] requirements.txt + hyperagent0 + extras [${EXTRAS}]"
 "${PIP}" install --quiet uv
-if [ "${DEV_MODE}" -eq 1 ]; then
-    "${UV}" pip install --quiet --python "${VENV_DIR}/bin/python" -r requirements.txt
-    "${UV}" pip install --quiet --python "${VENV_DIR}/bin/python" -e ".[${EXTRAS}]"
-else
-    "${UV}" pip install --quiet --python "${VENV_DIR}/bin/python" -r requirements.txt
-    "${UV}" pip install --quiet --python "${VENV_DIR}/bin/python" ".[${EXTRAS}]"
-fi
+"${UV}" pip install --quiet --python "${VENV_DIR}/bin/python" -r requirements.txt
+# Editable install in BOTH dev and curl-bash flows. REPO_DIR is at a
+# stable path (~/.hyperagent0/repo by default), so editable is safe —
+# and it makes ``git pull`` upgrades work without a re-install step.
+"${UV}" pip install --quiet --python "${VENV_DIR}/bin/python" -e ".[${EXTRAS}]"
 
 echo "==> [5/5] applying pin overrides (requirements2.txt, runs last)"
 "${UV}" pip install --quiet --python "${VENV_DIR}/bin/python" -r requirements2.txt
+
+# Editable install means hyperagent0/__init__.py lives in the cloned
+# repo on disk, not in site-packages — so a future ``git pull`` of the
+# repo automatically updates the installed package. No reinstall step
+# needed during routine upgrades.
 
 # ---------------------------------------------------------------------------
 # Site bootstrap: drop a .pth file so every Python invocation in this venv
