@@ -1,32 +1,42 @@
+# HyperAgent Zero — compose deployment. See README.md "Scenario D" for the
+# end-to-end walkthrough. Copy ``.env.example`` to ``.env`` next to this file
+# (or set env vars in your shell) before ``docker compose up``.
+#
+#   docker compose -f docker/hyperagent0/docker-compose.yml up -d
+#   docker compose -f docker/hyperagent0/docker-compose.yml logs -f
+#   docker compose -f docker/hyperagent0/docker-compose.yml down
+
 services:
   hyperagent0:
-    image: bayeslearner/hyperagent0:dev
-    # Build from local source. Comment out `build` and pull the published image
-    # instead when consuming.
-    build:
-      context: ../..
-      dockerfile: docker/hyperagent0/Dockerfile
+    image: bayeslearner/hyperagent0:latest
+    # Uncomment to build from local source instead of pulling the published
+    # image. The build context is the repo root, two dirs up from this file.
+    # build:
+    #   context: ../..
+    #   dockerfile: docker/hyperagent0/Dockerfile
     container_name: hyperagent0
     restart: unless-stopped
     ports:
-      - "50080:50080"
+      - "${HYPERAGENT0_PORT:-50080}:50080"
     volumes:
       # Persistent state: vector memory, project data, daemon logs.
       - hyperagent0_memory:/app/memory
       - hyperagent0_usr:/app/usr
       - hyperagent0_logs:/app/logs
-      # Mount the host's docker socket if you want the agent's docker-sandbox
-      # code-execution backend to spawn sibling containers (spec 05).
+      # Uncomment to let the agent's docker-sandbox backend (spec 05) spawn
+      # sibling containers on the host. Requires the host to allow socket
+      # mounts; consider rootless docker / podman if that's a concern.
       # - /var/run/docker.sock:/var/run/docker.sock
     environment:
       WEB_UI_HOST: "0.0.0.0"
       WEB_UI_PORT: "50080"
-      # Configure the LLM provider via these or via /app/usr/settings.json.
-      # CHAT_MODEL_PROVIDER: "openai"
-      # CHAT_MODEL_NAME: "claude-sonnet-4-20250514"
-      # CHAT_MODEL_API_BASE: "http://host.docker.internal:8317"
-      # OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      # ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      # The agent reads these on startup and writes them into settings.json
+      # if no settings exist yet. See .env.example for the full list.
+      CHAT_MODEL_PROVIDER: "${CHAT_MODEL_PROVIDER:-openai}"
+      CHAT_MODEL_NAME: "${CHAT_MODEL_NAME:-cc/claude-sonnet-4-6}"
+      CHAT_MODEL_API_BASE: "${CHAT_MODEL_API_BASE:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
 
 volumes:
   hyperagent0_memory:

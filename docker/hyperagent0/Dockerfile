@@ -1,15 +1,24 @@
-# hyperagent0 full-stack image (spec 01 host-first, container deployment flavor).
-#
-# Differs from upstream's docker/run/ in two ways:
-#   - Debian slim base instead of Kali (smaller, no pentest tooling baked in).
-#   - Bundles only what the daemon + agent need to run; code-execution sandbox
-#     is a separate image (docker/sandbox/Dockerfile, spec 05).
+# Full HyperAgent Zero image. Bundles the agent daemon + all extras.
+# Code-execution sandboxing uses a separate slim image (../sandbox/Dockerfile),
+# spawned per-project by spec 05's docker/podman backends.
 #
 # Build from repo root:
-#   docker build -f docker/hyperagent0/Dockerfile -t bayeslearner/hyperagent0:dev .
-#
+#   docker build -f docker/hyperagent0/Dockerfile -t bayeslearner/hyperagent0:latest .
 # Run:
-#   docker run --rm -p 50080:50080 -v hyperagent0-data:/app/memory bayeslearner/hyperagent0:dev
+#   docker run --rm -p 50080:50080 -v hyperagent0-data:/app/memory bayeslearner/hyperagent0:latest
+#
+# Install pattern mirrors upstream's docker/base/fs/ins/install_python.sh
+# and docker/run/fs/ins/install_A0.sh — sequential pip resolutions with the
+# override file applied LAST so its pins win:
+#
+#   1. CPU torch from the pytorch index (isolated --index-url, not --extra)
+#   2. uv pip install -r requirements.txt          (gets browser-use → openai 1.99.2)
+#   3. uv pip install ".[all]"                     (our extras + entry points)
+#   4. uv pip install -r requirements2.txt         (forces openai 1.99.5)
+#
+# No constraints file. No --index-strategy magic. Order matters: step 4 runs
+# AFTER ".[all]" because the [all] resolution will otherwise downgrade openai
+# back to browser-use's transitive pin. requirements2.txt is the final word.
 
 FROM python:3.12-slim
 
@@ -44,45 +53,40 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy dependency manifests + constraints first for layer caching.
+# Manifests + python source first for layer caching. pyproject.toml's
+# [tool.setuptools.packages.find] resolves the package list at install time,
+# so the hyperagent0/ and python/ trees must exist before `pip install .`.
 COPY pyproject.toml README.md LICENSE ./
 COPY requirements.txt requirements2.txt requirements-hyperagent0.txt ./
-COPY docker/hyperagent0/constraints.txt ./docker-constraints.txt
-# pyproject.toml's [tool.setuptools.packages.find] needs the packages to exist
-# at install time. Copy them before pip install.
 COPY hyperagent0 ./hyperagent0
 COPY python ./python
 
-# Install uv (Rust-built resolver, what upstream uses in install_A0.sh).
-# pip's SAT-solver thrashes on this dep graph (scipy → backtrack → source-build
-# scipy 1.11 → needs gfortran → fail). uv handles it cleanly.
-RUN pip install --no-cache-dir uv
+# Step 1: CPU torch wheels from the dedicated pytorch index. Versions match
+# upstream install_python.sh for consistency with their tested set. Using
+# --index-url (not --extra-index-url) keeps this install fully isolated to
+# the pytorch index, which is what produces +cpu local-version wheels.
+RUN pip install --no-cache-dir \
+        torch==2.4.0 torchvision==0.19.0 \
+        --index-url https://download.pytorch.org/whl/cpu
 
-# Three-step install via uv. Each `uv pip install` freezes its results as
-# constraints for the next — protects against backtracking across boundaries.
-# Step 1: CPU torch stack.
-# Step 2: rest of the wheels via [all] extras.
-# Step 3: requirements2.txt (separate because browser-use openai conflict).
-# --index-strategy unsafe-best-match: let uv check both pypi and pytorch-cpu
-# index for each package (default 'first-index' is a dep-confusion safeguard
-# that doesn't apply when both indexes are trusted public registries).
-ENV UV_INDEX_STRATEGY=unsafe-best-match \
-    UV_INDEX_URL=https://pypi.org/simple/ \
-    UV_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu
+# Step 2: uv (Rust-built resolver) + the main requirements file. This
+# installs browser-use, litellm, and the rest. openai will be at
+# browser-use's transitive pin (1.99.2) after this step — fixed below.
+RUN pip install --no-cache-dir uv \
+ && uv pip install --no-cache --system -r requirements.txt
 
-RUN uv pip install --no-cache --system \
-        "torch==2.7.1+cpu" "torchvision==0.22.1+cpu" \
- && uv pip install --no-cache --system \
-        --constraint ./docker-constraints.txt \
-        ".[all]" \
- && uv pip install --no-cache --system \
-        --constraint ./docker-constraints.txt \
-        -r requirements2.txt
+# Step 3: our wrapper package + opt-in extras. Registers the haz /
+# hyperagent0 entry points and adds anthropic, claude-agent-sdk, docker,
+# podman, and channel SDKs.
+RUN uv pip install --no-cache --system ".[all]"
 
-# Now copy the rest of the runtime tree. Source files agent.py / models.py /
-# run_ui.py / initialize.py are imported at startup by hyperagent0.cli_commands.start,
-# and runtime asset dirs (prompts/, knowledge/, agents/, webui/, skills/) are
-# looked up by path. .dockerignore strips logs/tmp/usr/.git/.venv.
+# Step 4: override pins. requirements2.txt contains explicit upgrades
+# (openai==1.99.5) that win against the transitive pins set above. Runs
+# last so subsequent resolutions cannot undo it.
+RUN uv pip install --no-cache --system -r requirements2.txt
+
+# Runtime source tree. Copied after deps so dep layers cache when only
+# source changes. .dockerignore strips logs/, tmp/, usr/, .git/, .venv/.
 COPY agent.py initialize.py models.py preload.py prepare.py run_ui.py run_tunnel.py ./
 COPY agents ./agents
 COPY prompts ./prompts
@@ -92,9 +96,9 @@ COPY skills ./skills
 COPY conf ./conf
 COPY lib ./lib
 
-# Trim build-only apt packages and pip cache. Saves ~250MB.
+# Trim build-only apt packages and resolver caches. Saves ~300MB.
 RUN apt-get purge -y --auto-remove build-essential \
-    && rm -rf /var/lib/apt/lists/* /root/.cache/pip
+    && rm -rf /var/lib/apt/lists/* /root/.cache/pip /root/.cache/uv
 
 # Mount points for persistent state. memory/ holds vector DBs, usr/ holds
 # projects + secrets, logs/ holds daemon logs.
