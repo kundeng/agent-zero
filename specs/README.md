@@ -16,7 +16,7 @@ Fork of [agent0ai/agent-zero](https://github.com/agent0ai/agent-zero) with five 
 
 - **MCP client support**: `python/helpers/mcp_handler.py` — stdio, SSE, streamable-http transports
 - **SKILL.md standard format**: `python/helpers/skills.py` — Anthropic open-standard with frontmatter
-- **Proxy LLM support**: LiteLLM `api_base` override → `localhost:8317` works today
+- **Proxy LLM support**: LiteLLM `api_base` override → `localhost:20128` works today
 - **Project model**: `.a0proj/` with project.json, instructions, knowledge, secrets, agent overrides
 
 ## Implementation Order

@@ -92,11 +92,11 @@ specs_root: specs/
 
 ## Proxy LLM
 
-The user has a proxy LLM at `localhost:8317` (OpenAI-compatible, serves Claude models). To use it:
+The user has a proxy LLM at `localhost:20128` (OpenAI-compatible, serves Claude models). To use it:
 ```json
 {
     "chat_model_provider": "openai",
-    "chat_model_name": "claude-sonnet-4-20250514",
-    "chat_model_api_base": "http://localhost:8317"
+    "chat_model_name": "cc/claude-sonnet-4-6",
+    "chat_model_api_base": "http://localhost:20128"
 }
 ```

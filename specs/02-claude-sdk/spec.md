@@ -22,7 +22,7 @@ Agent Zero uses LiteLLM as its universal LLM gateway, which supports Claude via 
 - **Session management** with conversation compaction
 - **MCP server integration** built into the SDK
 
-The user also has a proxy LLM at `localhost:8317` (OpenAI-compatible) that can serve Claude models. Both paths must work.
+The user also has a proxy LLM at `localhost:20128` (OpenAI-compatible) that can serve Claude models. Both paths must work.
 
 ### Relationship to spec 01 (wrapper architecture)
 
@@ -102,7 +102,7 @@ Where extensions can replace patches, prefer extensions per CLAUDE.md ("Extensio
 
 ### P2 — Should Do
 - [ ] 2.1 Test: Claude SDK provider with direct Anthropic API key
-- [ ] 2.2 Test: LiteLLM provider with proxy at localhost:8317 (unchanged)
+- [ ] 2.2 Test: LiteLLM provider with proxy at localhost:20128 (unchanged)
 - [ ] 2.3 Test: Tool dispatch round-trip (Claude calls tool → execute → result back)
 - [ ] 2.4 Test: Extended thinking with budget control
 - [ ] 2.5 Integrate cost tracking for Claude SDK (thinking tokens are expensive)
