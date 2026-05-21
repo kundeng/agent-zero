@@ -13,13 +13,11 @@ from pathlib import Path
 
 import click
 
-
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+from .. import paths as _paths
 
 
 def _settings_path() -> Path:
-    return _repo_root() / "usr" / "settings.json"
+    return _paths.settings_path()
 
 
 def _load_settings() -> dict | None:
@@ -30,6 +28,21 @@ def _load_settings() -> dict | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise click.ClickException(f"failed to read {path}: {exc}")
+
+
+def _save_settings(data: dict) -> None:
+    path = _settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def _coerce(value: str):
+    """Best-effort JSON parse so ``true``/``false``/numbers/lists work."""
+
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return value
 
 
 @click.group("config")
@@ -64,3 +77,19 @@ def _get(key: str) -> None:
         click.echo(json.dumps(value, indent=2))
     else:
         click.echo(value)
+
+
+@command.command("set")
+@click.argument("key")
+@click.argument("value")
+def _set(key: str, value: str) -> None:
+    """Set ``KEY`` to ``VALUE`` in the settings file.
+
+    VALUE is parsed as JSON when possible (so ``true``, ``42``,
+    ``["a","b"]`` work). Otherwise it's stored as a string.
+    """
+
+    current = _load_settings() or {}
+    current[key] = _coerce(value)
+    _save_settings(current)
+    click.echo(f"{key} = {current[key]!r}  ({_settings_path()})")

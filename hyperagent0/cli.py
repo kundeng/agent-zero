@@ -20,6 +20,13 @@ from typing import Any
 import click
 
 from . import __version__
+from . import paths as _paths
+
+# Make ``agent.py`` and friends importable for subcommands that need them
+# (``haz start`` chiefly). Stdlib-only, cached, and a no-op if the repo
+# can't be located — so we don't break ``haz --help`` for users who
+# haven't run install.sh yet.
+_paths.ensure_on_syspath()
 
 # Map of subcommand name -> module under hyperagent0.cli_commands.
 # Each module must expose a top-level Click ``Command`` named ``command``.
