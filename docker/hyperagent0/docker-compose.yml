@@ -1,0 +1,34 @@
+services:
+  hyperagent0:
+    image: bayeslearner/hyperagent0:dev
+    # Build from local source. Comment out `build` and pull the published image
+    # instead when consuming.
+    build:
+      context: ../..
+      dockerfile: docker/hyperagent0/Dockerfile
+    container_name: hyperagent0
+    restart: unless-stopped
+    ports:
+      - "50080:50080"
+    volumes:
+      # Persistent state: vector memory, project data, daemon logs.
+      - hyperagent0_memory:/app/memory
+      - hyperagent0_usr:/app/usr
+      - hyperagent0_logs:/app/logs
+      # Mount the host's docker socket if you want the agent's docker-sandbox
+      # code-execution backend to spawn sibling containers (spec 05).
+      # - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      WEB_UI_HOST: "0.0.0.0"
+      WEB_UI_PORT: "50080"
+      # Configure the LLM provider via these or via /app/usr/settings.json.
+      # CHAT_MODEL_PROVIDER: "openai"
+      # CHAT_MODEL_NAME: "claude-sonnet-4-20250514"
+      # CHAT_MODEL_API_BASE: "http://host.docker.internal:8317"
+      # OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      # ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+
+volumes:
+  hyperagent0_memory:
+  hyperagent0_usr:
+  hyperagent0_logs:
