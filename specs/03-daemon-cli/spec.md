@@ -154,3 +154,11 @@ haz uninstall-service
 **2026-05-20** — Renamed package, wheel, and long-form CLI binary from `hyperagent-zero` / `hyperagent_zero` to unified `hyperagent0` per spec 01 D9. Short CLI alias `haz` unchanged. State dir is now `~/.hyperagent0/`. Systemd unit is `hyperagent0.service`. All `cli_commands/` modules live under the `hyperagent0/` wrapper package per the new fork architecture; `python/` upstream tree stays untouched by spec 03 entirely (spec 03's surface is purely additive).
 
 **2026-05-20** — Absorbed CLI ergonomics from spec 01 review. Added D4 (`haz` no-args → status + hint, never silently starts), D5 (lazy subcommand loading, < 200ms cold-start budget for non-launch commands), D6 (foreground default, `-d` for daemon, `--systemd` for unit invocation). Documented the full target CLI surface up front. Task 1.1 restructured around lazy command modules under `hyperagent0/cli_commands/`. New task 2.5 (`haz exec` one-shot) makes the CLI useful for scripts/pipelines without a daemon. New task 2.9 enforces the cold-start budget. Open questions added for `haz exec` daemon reuse and CI enforcement of the budget.
+
+**2026-05-21** — Three install-UX refinements landed (spec 07 owns the rationale; logging here so subcommand-level history stays complete):
+
+- `haz start` default port is now **50080**, not upstream's 5000 (which collides with macOS AirPlay). `WEB_UI_PORT` env var still overrides, as does `--port`.
+- `haz setup --quick` removed. Non-interactive mode now writes ONLY the fields the user passes as flags — no opinionated `chat_model_*` defaults sprayed when the user only meant `--sandbox docker`. Interactive prompts unchanged.
+- `haz config set KEY VALUE` added; was previously read-only (`get` + `path`). Values are JSON-parsed when possible (`true`, `42`, `["a","b"]`), otherwise stored as string. Backs the README's `haz config set sandbox_mode docker` flow for switching to per-project containers.
+
+Also: cold-start verified end-to-end after the path-resolver changes (`hyperagent0/paths.py`, stdlib-only, lru_cached) — `haz status` stays at ~30ms on the VM under the spec's 200ms budget.

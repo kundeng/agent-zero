@@ -1,6 +1,6 @@
 # HyperAgent Zero — Spec Index
 
-Fork of [agent0ai/agent-zero](https://github.com/agent0ai/agent-zero) with five key improvements to turn it into a proper hyperagent harness.
+Fork of [agent0ai/agent-zero](https://github.com/agent0ai/agent-zero), re-shaped as a host-first hyperagent harness.
 
 ## Specs
 
@@ -11,6 +11,8 @@ Fork of [agent0ai/agent-zero](https://github.com/agent0ai/agent-zero) with five 
 | 03 | [Daemon & CLI](03-daemon-cli/spec.md) | DRAFT | devops | 01-host-first |
 | 04 | [Chat Channel Integration](04-chat-channels/spec.md) | DRAFT | channels | 01-host-first, 03-daemon-cli |
 | 05 | [Project Isolation & Sandboxing](05-project-isolation/spec.md) | DRAFT | architecture | 01-host-first |
+| 06 | [Channel Hardening](06-channel-hardening/spec.md) | DRAFT | channels | 04-chat-channels |
+| 07 | [Install UX — User Journeys](07-install-ux/spec.md) | DRAFT | devops | 01-host-first, 03-daemon-cli |
 
 ## What Agent Zero Already Has (no spec needed)
 
@@ -22,8 +24,10 @@ Fork of [agent0ai/agent-zero](https://github.com/agent0ai/agent-zero) with five 
 ## Implementation Order
 
 ```
-01-host-first  ──→  03-daemon-cli  ──→  04-chat-channels
-      │                                          
+01-host-first  ──→  03-daemon-cli  ──→  04-chat-channels  ──→  06-channel-hardening
+      │                       │
+      │                       └──→  07-install-ux
+      │
       └──────────→  05-project-isolation
 
 02-claude-sdk  ──→  (independent, parallel with 01)
@@ -31,4 +35,5 @@ Fork of [agent0ai/agent-zero](https://github.com/agent0ai/agent-zero) with five 
 
 P0 first pass: 01 + 02 (host-first + Claude SDK)
 P1 second pass: 03 + 05 (daemon lifecycle + project sandboxing)
-P2 third pass: 04 (chat channels)
+P2 third pass: 04 + 06 (chat channels + hardening)
+P3 fourth pass: 07 (install UX, captures the user-journey decisions)
