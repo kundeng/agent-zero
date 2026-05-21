@@ -7,7 +7,7 @@ name = "hyperagent0"
 version = "0.1.0.dev0"
 description = "HyperAgent Zero — host-first agentic harness forked from agent0ai/agent-zero"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = { file = "LICENSE" }
 authors = [
     { name = "HyperAgent Zero contributors" },
@@ -17,8 +17,8 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
@@ -79,8 +79,14 @@ include = ["hyperagent0*", "python*"]
 exclude = ["tests*", "logs*", "tmp*", "usr*", "webui*", "docker*", "docs*"]
 
 [tool.setuptools.dynamic]
-# Combine upstream requirements.txt with our own wrapper deps so we never
-# patch upstream's requirements.txt (preserves cherry-pick ergonomics).
+# Upstream split requirements into requirements.txt + requirements2.txt
+# (commit 7081479). They install them sequentially in install_A0.sh because
+# requirements2.txt's openai==1.99.5 conflicts with browser-use 0.5.11's
+# transitive openai==1.99.2 pin, and only sequential install (where each
+# step is independently resolved) lets the newer openai override the older
+# transitive pin. We bundle only requirements.txt here; users / packagers
+# install requirements2.txt as a second step. See specs/01-host-first
+# log entries for the long-form discussion.
 dependencies = { file = ["requirements.txt", "requirements-hyperagent0.txt"] }
 
 [tool.pytest.ini_options]
