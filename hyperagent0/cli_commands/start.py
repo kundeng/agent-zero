@@ -63,6 +63,62 @@ def _install_signal_handlers(lock_handle) -> None:
     signal.signal(signal.SIGINT, _handler)
 
 
+_SETTINGS_ENV_VARS: dict[str, str] = {
+    # Settings.json key  <-  Environment variable name
+    "chat_model_provider": "CHAT_MODEL_PROVIDER",
+    "chat_model_name": "CHAT_MODEL_NAME",
+    "chat_model_api_base": "CHAT_MODEL_API_BASE",
+    "sandbox_mode": "SANDBOX_MODE",
+}
+
+
+def _apply_env_defaults_to_settings() -> None:
+    """Write env-var defaults into ``usr/settings.json`` on first start.
+
+    Compose users (Journey D) set ``SANDBOX_MODE`` / ``CHAT_MODEL_*`` in
+    their ``.env``. The container reads them here and persists them as
+    defaults — but ONLY for fields not already set. That way settings
+    configured later via the web UI win on subsequent restarts, and a
+    docker-compose restart doesn't clobber what the user picked.
+
+    Stdlib-only so the cold-start budget for ``haz start`` (which goes
+    on to launch the whole agent stack anyway) is unaffected.
+    """
+
+    import json
+    import os
+    from .. import paths as _paths
+
+    pending: dict[str, str] = {}
+    for setting_key, env_name in _SETTINGS_ENV_VARS.items():
+        value = os.environ.get(env_name)
+        if value:
+            pending[setting_key] = value
+
+    if not pending:
+        return
+
+    path = _paths.settings_path()
+    current: dict = {}
+    if path.is_file():
+        try:
+            current = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            current = {}
+
+    # Only apply env vars for keys NOT already in settings.json.
+    # This is "default on first boot," not "force on every boot."
+    changed = False
+    for key, value in pending.items():
+        if key not in current or not current[key]:
+            current[key] = value
+            changed = True
+
+    if changed:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
+
+
 def _run_server(host: str | None, port: int | None) -> None:
     """Call into ``run_ui.start_server`` with the given overrides.
 
@@ -183,6 +239,11 @@ def command(daemonize: bool, systemd: bool, host: str | None, lan: bool, port: i
     # regardless of how the user installed.
     if port is None:
         port = int(os.environ.get("WEB_UI_PORT", "50080"))
+
+    # First-boot defaults from env: SANDBOX_MODE, CHAT_MODEL_*. Idempotent
+    # — only writes fields not already present in usr/settings.json. See
+    # spec 07 P2.1 for the compose-deployment motivation.
+    _apply_env_defaults_to_settings()
 
     if daemonize and systemd:
         raise click.UsageError("--daemon and --systemd are mutually exclusive.")

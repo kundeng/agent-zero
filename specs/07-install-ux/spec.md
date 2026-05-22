@@ -250,19 +250,32 @@ spec-tracked ways.
        repo is the cheapest update path.
 
 ### P2 — Should Do
-- [ ] 2.1 Compose `.env.example` and `docker-compose.yml` accept
-       `SANDBOX_MODE=docker` so journey D can opt into per-project
-       container isolation without editing settings.json inside the
-       container.
-- [ ] 2.2 Optional: PyPI publish. Once stable enough for that, the
-       curl|bash install can pivot to `pipx install hyperagent0`
-       (still with a post-install hook that clones the repo for
-       runtime assets). Lower priority — the current flow works and
-       PyPI's name-squatting risk for `hyperagent0` is low.
-- [ ] 2.3 `haz uninstall` subcommand: remove `~/.hyperagent0`, the
-       symlinks in `~/.local/bin/`, and emit a one-line summary of
-       what was removed. Currently users have to know which dirs to
-       `rm -rf`.
+- [x] 2.1 ``haz start`` now reads ``SANDBOX_MODE`` + ``CHAT_MODEL_*``
+       env vars and writes them into ``usr/settings.json`` on first
+       boot. Idempotent: a value already in settings.json (e.g.,
+       picked via the web UI) survives restarts; an env var only
+       wins when the field is unset or empty. Compose ``.env.example``
+       gained a ``SANDBOX_MODE=`` entry; ``docker-compose.yml``
+       passes it through to the container.
+- [ ] 2.2 Optional: PyPI publish. **Deferred indefinitely**. Because
+       of D4 (wheel doesn't ship runtime assets), ``pipx install
+       hyperagent0`` alone can't produce a working install — the
+       repo clone is load-bearing. A PyPI package would either need
+       a post-install hook that clones (confusing UX) or upstream
+       restructuring to ship assets as package data (large
+       divergence). Re-open only if upstream itself goes
+       package-shaped.
+- [x] 2.3 ``haz uninstall`` subcommand: stops the daemon, removes
+       ``~/.hyperagent0/{venv,repo,logs}`` and the symlinks under
+       ``~/.local/bin``, prints a summary. Auto-detects the install
+       prefix from the running binary's path (so ``--prefix DIR``
+       installs work too). Sanity check: refuses to touch a
+       directory that doesn't contain ``venv/bin/haz`` +
+       ``repo/agent.py``. ``--keep-state`` preserves ``repo/usr/``
+       and ``logs/`` for project data / post-mortem; ``-y``/``--yes``
+       skips confirmation. 6 unit tests pin the safety invariants
+       (won't remove unrelated dirs, won't blow away symlinks
+       pointing at other installs).
 
 ### P3 — Nice to Have
 - [ ] 3.1 macOS-specific install path: the `add-apt-repository`
@@ -343,3 +356,21 @@ to plain `haz start --systemd`, with host/port from env vars in
 the image (`WEB_UI_HOST=0.0.0.0`, `WEB_UI_PORT=50080`). Compose
 users can now override either via `.env` without rebuilding the
 image.
+
+**2026-05-22** — Landed P2.1 (env var → settings.json bridge) and
+P2.3 (`haz uninstall`). Deferred P2.2 (PyPI publish) indefinitely
+because D4 makes a useful PyPI package impossible without
+upstream-shape changes — the wheel can't ship runtime assets.
+For P2.1, `haz start` grew a small `_apply_env_defaults_to_settings`
+helper that reads `SANDBOX_MODE` and `CHAT_MODEL_*` env vars and
+writes them into `usr/settings.json` ONLY for fields not already
+set. Tested with 6 unit cases covering the precedence rules
+(existing UI values win, blank env vars don't create empty keys,
+"" placeholders in settings.json count as unset). For P2.3,
+`haz uninstall` is intentionally paranoid: it auto-detects the
+install prefix from the running binary's `sys.prefix`, refuses
+to touch a dir that doesn't look like a hyperagent0 install
+(missing `venv/bin/haz` or `repo/agent.py`), and only unlinks
+symlinks that actually point into the prefix it's removing. 6
+more tests cover the safety invariants. Total session-new tests:
+20 + 6 + 6 = 32, all green.
