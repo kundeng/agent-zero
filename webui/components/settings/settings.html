@@ -42,13 +42,17 @@
                  :class="{'active': $store.settings.activeTab === 'external'}"
                  @click="$store.settings.switchTab('external')"
                  title="External Services">External Services</div>
-            <div class="settings-tab" 
+            <div class="settings-tab"
                  :class="{'active': $store.settings.activeTab === 'mcp'}"
-                 @click="$store.settings.switchTab('mcp')" 
+                 @click="$store.settings.switchTab('mcp')"
                  title="MCP">MCP/A2A</div>
-            <div class="settings-tab" 
+            <div class="settings-tab"
+                 :class="{'active': $store.settings.activeTab === 'channels'}"
+                 @click="$store.settings.switchTab('channels')"
+                 title="Channels">Channels</div>
+            <div class="settings-tab"
                  :class="{'active': $store.settings.activeTab === 'developer'}"
-                 @click="$store.settings.switchTab('developer')" 
+                 @click="$store.settings.switchTab('developer')"
                  title="Developer">Developer</div>
             <div class="settings-tab"
                  :class="{'active': $store.settings.activeTab === 'backup'}"
@@ -67,6 +71,9 @@
           </div>
           <div x-show="$store.settings.activeTab === 'mcp'">
             <x-component path="settings/mcp/mcp-settings.html"></x-component>
+          </div>
+          <div x-show="$store.settings.activeTab === 'channels'">
+            <x-component path="settings/channels/channels.html"></x-component>
           </div>
           <div x-show="$store.settings.activeTab === 'developer'">
             <x-component path="settings/developer/developer-settings.html"></x-component>

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import OrderedDict
 from typing import Any, Optional
 
 from .base import BaseChannel, InboundMessage, OutboundMessage, register_channel
@@ -25,8 +26,29 @@ from .formatter import format_for_channel
 logger = logging.getLogger(__name__)
 
 
+# Cap on the dedup LRU. Slack re-delivers events when our 200 ack
+# doesn't reach them inside their 3s timeout; in practice we see at
+# most a handful of repeats per minute, so a 1024-entry ring is
+# orders of magnitude larger than needed without burning memory.
+_SEEN_EVENT_ID_CAP = 1024
+
+
 class SlackChannel(BaseChannel):
-    """Slack adapter — Socket Mode via ``slack-bolt``."""
+    """Slack adapter — Socket Mode via ``slack-bolt``.
+
+    Spec 08 D9 hardening:
+
+    * ``_seen_event_ids`` is a bounded LRU that drops duplicate
+      ``event_id`` values Slack re-delivers when our HTTP 200 ack
+      doesn't make it back in time. Without this filter every
+      re-delivery would route to the agent again — burning tokens
+      and posting the same reply twice.
+    * ``_bot_id`` is resolved alongside ``_bot_user_id`` at
+      :meth:`connect`. The ``message`` handler drops events whose
+      ``bot_id`` matches our bot's id — without this filter, the
+      bot's own thread replies show up as inbound messages and
+      trigger an infinite-loop conversation.
+    """
 
     channel_type = "slack"
 
@@ -39,6 +61,60 @@ class SlackChannel(BaseChannel):
         self._stopped = False
         # Resolved at connect() via auth.test for spec 06 D3 mention detection.
         self._bot_user_id: Optional[str] = None
+        # The platform-level bot identity. Set alongside _bot_user_id
+        # at connect() so the own-message filter works.
+        self._bot_id: Optional[str] = None
+        # LRU set of recently-seen Slack event_ids — keys are the
+        # event envelope ids, values are unused. Cap enforced by
+        # _remember_event() below.
+        self._seen_event_ids: "OrderedDict[str, None]" = OrderedDict()
+
+    # ------------------------------------------------------------------
+    # Hardening helpers (spec 08 D9)
+    # ------------------------------------------------------------------
+
+    def _is_duplicate_event(self, event_id: Optional[str]) -> bool:
+        """Return True iff this ``event_id`` was already dispatched.
+
+        Slack re-delivers events when our 200 ack doesn't reach
+        ``slack.com`` inside their 3s window. The first delivery wins;
+        every subsequent one is a no-op.
+        """
+
+        if not event_id:
+            # Slack should always supply an envelope event_id, but
+            # never trust input: a missing id can't be deduped, so
+            # treat as non-duplicate and let the handler proceed.
+            return False
+        if event_id in self._seen_event_ids:
+            # Refresh LRU position so we keep recently-seen ids alive.
+            self._seen_event_ids.move_to_end(event_id)
+            return True
+        self._seen_event_ids[event_id] = None
+        # Cap enforcement: drop the oldest entries on overflow.
+        while len(self._seen_event_ids) > _SEEN_EVENT_ID_CAP:
+            self._seen_event_ids.popitem(last=False)
+        return False
+
+    def _is_own_message(self, event: dict[str, Any]) -> bool:
+        """Return True iff the event was authored by this bot.
+
+        Slack's ``bot_id`` is the platform-level integration id (a
+        single string like ``B0123…``). Comparing it against the
+        ``auth.test`` response's ``bot_id`` is the canonical way to
+        catch self-routed messages — the ``subtype`` filter at the
+        spec-04 handler only catches Slack's *system* messages, not
+        our own ``chat.postMessage`` replies.
+        """
+
+        if not self._bot_id:
+            # auth.test didn't return a bot_id (e.g. user-token
+            # install). Fall back to the user_id comparison so we
+            # still drop self-authored messages.
+            if self._bot_user_id and str(event.get("user", "")) == self._bot_user_id:
+                return True
+            return False
+        return str(event.get("bot_id", "")) == self._bot_id
 
     async def connect(self) -> None:
         try:
@@ -64,10 +140,16 @@ class SlackChannel(BaseChannel):
         self._client = self._app.client
         adapter = self
 
-        # Resolve our bot user_id once for spec 06 D3 mention detection.
+        # Resolve our bot identity once for spec 06 D3 mention detection
+        # AND spec 08 D9 own-message filtering. ``user_id`` is the bot's
+        # *user* id used in ``<@UXXXX>`` mention tokens; ``bot_id`` is
+        # the platform-level integration id surfaced on every
+        # ``chat.postMessage`` we send (so we can recognize and drop
+        # our own messages on the inbound side).
         try:
             auth = await self._client.auth_test()
-            self._bot_user_id = str(auth.get("user_id", "") or "")
+            self._bot_user_id = str(auth.get("user_id", "") or "") or None
+            self._bot_id = str(auth.get("bot_id", "") or "") or None
         except Exception:
             logger.warning("slack auth_test failed; is_mention via app_mention only")
 
@@ -91,16 +173,43 @@ class SlackChannel(BaseChannel):
                 is_group=is_group,
             )
 
+        def _event_envelope_id(event: dict, body: Optional[dict]) -> Optional[str]:
+            # Slack puts the envelope id on the outer body
+            # (``body["event_id"]``) — bolt-async forwards ``event`` as
+            # the inner ``event`` block but the SDK also gives us the
+            # body via the handler signature. We accept both shapes
+            # defensively so the handler still de-dups when bolt
+            # changes its wire-up.
+            for src in (body or {}, event or {}):
+                eid = src.get("event_id") or src.get("client_msg_id")
+                if eid:
+                    return str(eid)
+            return None
+
         @self._app.event("app_mention")
-        async def _on_app_mention(event, _say) -> None:
+        async def _on_app_mention(event, body, _say) -> None:
+            # Drop duplicate redeliveries before doing any work.
+            if adapter._is_duplicate_event(_event_envelope_id(event, body)):
+                return
+            # Drop self-mentions (shouldn't normally happen but be
+            # defensive — Slack will surface our reply if it includes
+            # the bot's own user id).
+            if adapter._is_own_message(event):
+                return
             # Direct platform-confirmed mention — D3 happy path.
             inbound = _make_inbound(event, is_mention=True)
             await adapter._dispatch_inbound(inbound)
 
         @self._app.event("message")
-        async def _on_message(event, _say) -> None:
-            # Ignore bot/system messages.
+        async def _on_message(event, body, _say) -> None:
+            # Drop duplicate redeliveries.
+            if adapter._is_duplicate_event(_event_envelope_id(event, body)):
+                return
+            # Ignore bot/system messages (Slack's own subtype machinery).
             if event.get("subtype") is not None:
+                return
+            # Spec 08 D9: drop our own bot's replies before they loop.
+            if adapter._is_own_message(event):
                 return
             # If our bot's user_id appears in the text payload as a
             # ``<@UXXXXXX>`` token, that's also a mention.

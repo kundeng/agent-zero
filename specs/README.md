@@ -13,6 +13,7 @@ Fork of [agent0ai/agent-zero](https://github.com/agent0ai/agent-zero), re-shaped
 | 05 | [Project Isolation & Sandboxing](05-project-isolation/spec.md) | DRAFT | architecture | 01-host-first |
 | 06 | [Channel Hardening](06-channel-hardening/spec.md) | DRAFT | channels | 04-chat-channels |
 | 07 | [Install UX — User Journeys](07-install-ux/spec.md) | DRAFT | devops | 01-host-first, 03-daemon-cli |
+| 08 | [Channel Provisioning UX](08-channel-provisioning-ux/spec.md) | DRAFT | channels | 04-chat-channels, 06-channel-hardening |
 
 ## What Agent Zero Already Has (no spec needed)
 
@@ -24,7 +25,7 @@ Fork of [agent0ai/agent-zero](https://github.com/agent0ai/agent-zero), re-shaped
 ## Implementation Order
 
 ```
-01-host-first  ──→  03-daemon-cli  ──→  04-chat-channels  ──→  06-channel-hardening
+01-host-first  ──→  03-daemon-cli  ──→  04-chat-channels  ──→  06-channel-hardening  ──→  08-channel-provisioning-ux
       │                       │
       │                       └──→  07-install-ux
       │
@@ -37,3 +38,4 @@ P0 first pass: 01 + 02 (host-first + Claude SDK)
 P1 second pass: 03 + 05 (daemon lifecycle + project sandboxing)
 P2 third pass: 04 + 06 (chat channels + hardening)
 P3 fourth pass: 07 (install UX, captures the user-journey decisions)
+P4 fifth pass: 08 (channel provisioning UX — Settings tab + thin CLI)

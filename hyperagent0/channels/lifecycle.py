@@ -300,6 +300,46 @@ def get_router() -> Any:
     return _router
 
 
+def running_adapters() -> dict[str, dict[str, Any]]:
+    """Snapshot live-adapter state for the status API (spec 08 1.7).
+
+    Returns a mapping of ``channel_type`` -> ``{"live": bool}``. Future
+    expansion ground: ``last_error`` once adapters surface a
+    last-failure timestamp, ``connected_at`` once we record it. Kept
+    flat and JSON-serializable so :mod:`python.api.channels_status`
+    can pass the dict straight through.
+    """
+
+    with _lock:
+        # An adapter is in ``_channels`` if it was instantiated; the
+        # connect-with-retry path may have left it offline if every
+        # retry exhausted. Today we only have a binary live/not-live
+        # signal — refine when adapters expose a richer state.
+        snapshot: dict[str, dict[str, Any]] = {}
+        for name, adapter in _channels.items():
+            snapshot[name] = {
+                "live": adapter is not None,
+            }
+        return snapshot
+
+
+def restart_channels(timeout: float = 10.0) -> None:
+    """Stop every live adapter and (re)boot all enabled channels.
+
+    Called by ``/channels_apply`` after a provisioner writes new
+    secrets / channels.json blocks. Idempotent — calling on a daemon
+    with no live channels just runs :func:`start_enabled_channels`.
+
+    The two halves run inside the module-level ``_lock`` (an
+    :class:`threading.RLock` — re-entry is safe) so a parallel
+    ``/channels_apply`` can't observe a half-restarted state.
+    """
+
+    with _lock:
+        stop_all_channels(timeout=timeout)
+        start_enabled_channels()
+
+
 # ---------------------------------------------------------------------------
 # Internal — retry helper (spec 06 D4)
 # ---------------------------------------------------------------------------

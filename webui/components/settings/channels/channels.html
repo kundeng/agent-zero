@@ -1,0 +1,221 @@
+<html>
+<head>
+  <title>Channels Configuration</title>
+
+  <script type="module">
+    import { store } from "/components/settings/channels/channels-store.js";
+  </script>
+</head>
+
+<body>
+<div x-data>
+  <template x-if="$store.channelsStore">
+    <div x-init="$store.channelsStore.initialize()"
+         x-destroy="$store.channelsStore.onClose()">
+
+      <h3>
+        Chat Channels
+        <button class="btn slim primary" style="margin-left: 0.5em;"
+                :disabled="$store.channelsStore.loading"
+                @click="$store.channelsStore.applyAll()">
+          Apply
+        </button>
+      </h3>
+
+      <p class="channels-blurb">
+        Connect HyperAgent Zero to Slack, Telegram, Discord, and other chat platforms.
+        Each platform's "Provision" wizard handles credential setup end-to-end —
+        you only need the bootstrap credential for that platform.
+      </p>
+
+      <!-- Loading state -->
+      <div x-show="$store.channelsStore.loading" class="channels-loading">
+        Loading channels…
+      </div>
+
+      <!-- Channel cards -->
+      <div class="channels-list" x-show="!$store.channelsStore.loading">
+        <template x-for="ch in $store.channelsStore.channels" :key="ch.channel_type">
+          <div class="channel-card">
+
+            <!-- Header row: status dot + platform name + live/enabled badges -->
+            <div class="channel-header">
+              <div class="status-dot" :class="{
+                'dot-live': ch.live,
+                'dot-configured': ch.configured && !ch.live,
+                'dot-empty': !ch.configured
+              }"></div>
+              <span class="channel-name" x-text="ch.channel_type"></span>
+              <span class="channel-badge live" x-show="ch.live">live</span>
+              <span class="channel-badge enabled" x-show="!ch.live && ch.enabled">enabled (not running)</span>
+              <span class="channel-badge configured" x-show="!ch.live && !ch.enabled && ch.configured">configured</span>
+              <span class="channel-badge empty" x-show="!ch.configured">not configured</span>
+
+              <div class="channel-actions">
+                <button class="btn slim"
+                        @click="$store.channelsStore.startWizard(ch.channel_type)">
+                  <span x-text="ch.configured ? 'Re-provision' : 'Provision'"></span>
+                </button>
+                <button class="btn slim"
+                        :disabled="!ch.configured"
+                        @click="$store.channelsStore.testConnection(ch.channel_type)">
+                  Test
+                </button>
+              </div>
+            </div>
+
+            <!-- Secret status -->
+            <div class="channel-secrets" x-show="ch.required_secrets?.length">
+              <span class="label">Secrets:</span>
+              <template x-for="key in ch.required_secrets" :key="key">
+                <span class="secret-chip"
+                      :class="{ 'has': ch.configured_secrets[key], 'missing': !ch.configured_secrets[key] }"
+                      x-text="key"></span>
+              </template>
+            </div>
+
+            <!-- Test result -->
+            <div class="channel-test-result"
+                 x-show="$store.channelsStore.testResults[ch.channel_type]"
+                 :class="$store.channelsStore.testResults[ch.channel_type]?.ok ? 'test-ok' : 'test-err'">
+              <span x-text="$store.channelsStore.testResults[ch.channel_type]?.busy
+                ? 'Testing…'
+                : ($store.channelsStore.testResults[ch.channel_type]?.message || '')"></span>
+            </div>
+
+            <!-- Project binding (D7) -->
+            <div class="channel-project" x-show="ch.configured">
+              <span class="label">Default project:</span>
+              <input type="text"
+                     class="bind-input"
+                     placeholder="(none)"
+                     :value="ch.project_binding?.default || ''"
+                     @change.debounce.500ms="$store.channelsStore.bindProject(
+                       ch.channel_type, null, $event.target.value
+                     )">
+              <small class="hint">
+                Type a project name to route all chats on this channel to it.
+                Leave blank for "use default context".
+              </small>
+            </div>
+
+            <!-- Bootstrap link -->
+            <div class="channel-bootstrap" x-show="ch.bootstrap_url && !ch.configured">
+              First, get your bootstrap credential at
+              <a :href="ch.bootstrap_url" target="_blank" rel="noopener noreferrer"
+                 x-text="ch.bootstrap_url"></a>
+            </div>
+
+          </div>
+        </template>
+
+        <div x-show="$store.channelsStore.channels.length === 0" class="channels-empty">
+          No provisioners registered. (The daemon's channel runtime may not be loaded.)
+        </div>
+      </div>
+
+      <!-- Wizard modal (rendered inline when active) -->
+      <div x-show="$store.channelsStore.wizard" class="wizard-overlay">
+        <x-component path="settings/channels/wizard.html"></x-component>
+      </div>
+
+    </div>
+  </template>
+</div>
+</body>
+</html>
+
+<style>
+  .channels-blurb {
+    color: var(--color-text-secondary, #888);
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+  }
+  .channels-loading,
+  .channels-empty {
+    text-align: center;
+    color: var(--color-text-secondary, #888);
+    padding: 2rem;
+  }
+  .channels-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6em;
+  }
+  .channel-card {
+    padding: 0.7em 0.9em;
+    border: 1px solid rgba(192, 192, 192, 0.18);
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5em;
+  }
+  .channel-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6em;
+  }
+  .status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .dot-live      { background: #00c340; }
+  .dot-configured{ background: #f1c40f; }
+  .dot-empty     { background: transparent; border: 2px solid #999; }
+  .channel-name {
+    font-weight: 600;
+    text-transform: capitalize;
+  }
+  .channel-badge {
+    font-size: 0.75rem;
+    padding: 0.1em 0.5em;
+    border-radius: 10px;
+  }
+  .channel-badge.live      { background: rgba(0, 195, 64, 0.15); color: #00c340; }
+  .channel-badge.enabled   { background: rgba(241, 196, 15, 0.15); color: #b58a05; }
+  .channel-badge.configured{ background: rgba(192, 192, 192, 0.15); color: #888; }
+  .channel-badge.empty     { background: rgba(192, 192, 192, 0.08); color: #888; }
+  .channel-actions { margin-left: auto; display: flex; gap: 0.4em; }
+  .channel-secrets {
+    font-size: 0.8rem;
+    color: var(--color-text-secondary, #888);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3em;
+    align-items: center;
+  }
+  .channel-secrets .label { margin-right: 0.3em; }
+  .secret-chip {
+    padding: 0.1em 0.5em;
+    border-radius: 8px;
+    font-family: monospace;
+    font-size: 0.75rem;
+  }
+  .secret-chip.has     { background: rgba(0, 195, 64, 0.12); color: #2a7a37; }
+  .secret-chip.missing { background: rgba(228, 1, 56, 0.12); color: #c0392b; }
+  .channel-test-result { font-size: 0.85rem; padding: 0.3em 0.6em; border-radius: 4px; }
+  .channel-test-result.test-ok  { background: rgba(0, 195, 64, 0.10); color: #2a7a37; }
+  .channel-test-result.test-err { background: rgba(228, 1, 56, 0.10); color: #c0392b; }
+  .channel-project { display: flex; flex-direction: column; gap: 0.2em; font-size: 0.85rem; }
+  .channel-project .label { color: var(--color-text-secondary, #888); }
+  .channel-project .bind-input {
+    padding: 0.3em 0.5em;
+    border: 1px solid rgba(192, 192, 192, 0.3);
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    width: 16em;
+  }
+  .channel-project .hint { color: var(--color-text-secondary, #888); }
+  .channel-bootstrap { font-size: 0.85rem; color: var(--color-text-secondary, #888); }
+  .channel-bootstrap a { word-break: break-all; }
+
+  .wizard-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.55);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1000;
+  }
+</style>

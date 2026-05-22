@@ -1,0 +1,235 @@
+<html>
+<head>
+  <title>Channel Provisioning Wizard</title>
+</head>
+<body>
+<div x-data class="wizard">
+  <template x-if="$store.channelsStore?.wizard">
+    <div class="wizard-panel">
+
+      <!-- Header -->
+      <div class="wizard-header">
+        <h3>
+          <span x-text="$store.channelsStore.wizard.channelType"></span>
+          provisioning
+        </h3>
+        <button class="btn slim cancel" @click="$store.channelsStore.cancelWizard()">Cancel</button>
+      </div>
+
+      <!-- Step progress (mini breadcrumb) -->
+      <div class="wizard-progress">
+        <template x-for="(s, i) in $store.channelsStore.wizard.steps" :key="s.id">
+          <span class="wizard-pill"
+                :class="{
+                  'current': i === $store.channelsStore.wizard.currentStepIdx,
+                  'past': i < $store.channelsStore.wizard.currentStepIdx
+                }"
+                x-text="s.label">
+          </span>
+        </template>
+      </div>
+
+      <!-- Current step body -->
+      <div class="wizard-body" x-show="$store.channelsStore.wizard.currentStep">
+        <template x-if="$store.channelsStore.wizard.currentStep">
+          <div>
+            <h4 x-text="$store.channelsStore.wizard.currentStep.label"></h4>
+            <p class="wizard-help"
+               x-show="$store.channelsStore.wizard.currentStep.help_text"
+               x-text="$store.channelsStore.wizard.currentStep.help_text"></p>
+
+            <!-- Kind: input — render the fields -->
+            <template x-if="$store.channelsStore.wizard.currentStep.kind === 'input'">
+              <div class="wizard-fields">
+                <template x-for="field in $store.channelsStore.wizard.currentStep.fields" :key="field.id">
+                  <div class="field-row">
+                    <label class="field-label" x-text="field.label"></label>
+
+                    <template x-if="field.kind === 'password'">
+                      <input type="password"
+                             :placeholder="field.placeholder || ''"
+                             x-model="$store.channelsStore.wizard.inputs[field.id]"
+                             :required="field.required" />
+                    </template>
+                    <template x-if="field.kind === 'text'">
+                      <input type="text"
+                             :placeholder="field.placeholder || ''"
+                             x-model="$store.channelsStore.wizard.inputs[field.id]"
+                             :required="field.required" />
+                    </template>
+                    <template x-if="field.kind === 'textarea'">
+                      <textarea :placeholder="field.placeholder || ''"
+                                x-model="$store.channelsStore.wizard.inputs[field.id]"
+                                :required="field.required"></textarea>
+                    </template>
+                    <template x-if="field.kind === 'checkbox'">
+                      <input type="checkbox"
+                             :checked="$store.channelsStore.wizard.inputs[field.id] === 'true' ||
+                                       $store.channelsStore.wizard.inputs[field.id] === true"
+                             @change="$store.channelsStore.wizard.inputs[field.id] = $event.target.checked" />
+                    </template>
+                    <template x-if="field.kind === 'select'">
+                      <select x-model="$store.channelsStore.wizard.inputs[field.id]">
+                        <template x-for="opt in field.options" :key="opt.value">
+                          <option :value="opt.value" x-text="opt.label || opt.value"></option>
+                        </template>
+                      </select>
+                    </template>
+
+                    <small class="field-help" x-show="field.help_text" x-text="field.help_text"></small>
+                  </div>
+                </template>
+              </div>
+            </template>
+
+            <!-- Kind: link_with_callback -->
+            <template x-if="$store.channelsStore.wizard.currentStep.kind === 'link_with_callback'">
+              <div class="wizard-link-block">
+                <a class="install-link"
+                   :href="$store.channelsStore.wizard.currentStep.url || '#'"
+                   target="_blank" rel="noopener noreferrer"
+                   @click="$store.channelsStore.openInstallUrl()">
+                  Open install URL
+                </a>
+                <p class="wizard-help" x-show="$store.channelsStore.wizard.waitingForCallback">
+                  Waiting for you to click Allow in the popup tab…
+                </p>
+              </div>
+            </template>
+
+            <!-- Kind: link_with_paste -->
+            <template x-if="$store.channelsStore.wizard.currentStep.kind === 'link_with_paste'">
+              <div class="wizard-link-block">
+                <a class="install-link"
+                   x-show="$store.channelsStore.wizard.currentStep.url"
+                   :href="$store.channelsStore.wizard.currentStep.url"
+                   target="_blank" rel="noopener noreferrer">
+                  Open Slack
+                </a>
+                <div class="wizard-fields">
+                  <template x-for="field in $store.channelsStore.wizard.currentStep.fields" :key="field.id">
+                    <div class="field-row">
+                      <label class="field-label" x-text="field.label"></label>
+                      <input type="password"
+                             :placeholder="field.placeholder || ''"
+                             x-model="$store.channelsStore.wizard.inputs[field.id]" />
+                      <small class="field-help" x-show="field.help_text" x-text="field.help_text"></small>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+
+            <!-- Kind: info -->
+            <template x-if="$store.channelsStore.wizard.currentStep.kind === 'info'">
+              <div class="wizard-info"></div>
+            </template>
+
+            <!-- Kind: summary -->
+            <template x-if="$store.channelsStore.wizard.currentStep.kind === 'summary'">
+              <div class="wizard-summary">
+                Tokens saved. Click Apply to start the channel adapter.
+              </div>
+            </template>
+
+          </div>
+        </template>
+
+        <!-- Error / result message -->
+        <div class="wizard-error" x-show="$store.channelsStore.wizard.error"
+             x-text="$store.channelsStore.wizard.error"></div>
+        <div class="wizard-result"
+             x-show="$store.channelsStore.wizard.result?.message && !$store.channelsStore.wizard.error"
+             x-text="$store.channelsStore.wizard.result?.message"></div>
+      </div>
+
+      <!-- Footer buttons -->
+      <div class="wizard-footer">
+        <template x-if="$store.channelsStore.wizard.currentStep">
+          <div>
+            <!-- input / link_with_paste → primary "Continue" submits inputs -->
+            <button class="btn primary"
+                    :disabled="$store.channelsStore.wizard.busy"
+                    x-show="['input','link_with_paste'].includes($store.channelsStore.wizard.currentStep.kind)"
+                    @click="$store.channelsStore.submitStep()">
+              <span x-text="$store.channelsStore.wizard.busy ? 'Working…' : 'Continue'"></span>
+            </button>
+            <!-- link_with_callback → primary opens the URL -->
+            <button class="btn primary"
+                    x-show="$store.channelsStore.wizard.currentStep.kind === 'link_with_callback'
+                            && !$store.channelsStore.wizard.waitingForCallback"
+                    @click="$store.channelsStore.openInstallUrl()">
+              Click to install
+            </button>
+            <!-- summary → terminal -->
+            <button class="btn primary"
+                    x-show="$store.channelsStore.wizard.currentStep.kind === 'summary'"
+                    @click="$store.channelsStore.applyAll(); $store.channelsStore.cancelWizard();">
+              Apply & finish
+            </button>
+          </div>
+        </template>
+      </div>
+
+    </div>
+  </template>
+</div>
+</body>
+</html>
+
+<style>
+.wizard-panel {
+  background: var(--color-background, #1c1c24);
+  border-radius: 8px;
+  padding: 1.5em;
+  width: min(38rem, 95vw);
+  max-height: 85vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8em;
+}
+.wizard-header {
+  display: flex; justify-content: space-between; align-items: center;
+}
+.wizard-header h3 { margin: 0; text-transform: capitalize; }
+.wizard-progress {
+  display: flex; flex-wrap: wrap; gap: 0.3em; font-size: 0.75rem;
+}
+.wizard-pill {
+  padding: 0.15em 0.6em;
+  border-radius: 10px;
+  background: rgba(192, 192, 192, 0.1);
+  color: var(--color-text-secondary, #888);
+}
+.wizard-pill.current { background: rgba(0, 195, 64, 0.18); color: #00c340; }
+.wizard-pill.past    { background: rgba(192, 192, 192, 0.2); color: #aaa; }
+.wizard-body h4 { margin: 0.3em 0; }
+.wizard-help { color: var(--color-text-secondary, #888); font-size: 0.85rem; margin: 0.2em 0 0.7em; }
+.wizard-fields { display: flex; flex-direction: column; gap: 0.8em; }
+.field-row { display: flex; flex-direction: column; gap: 0.2em; }
+.field-label { font-size: 0.85rem; font-weight: 600; }
+.field-row input[type=text], .field-row input[type=password], .field-row textarea, .field-row select {
+  padding: 0.4em 0.6em;
+  border: 1px solid rgba(192, 192, 192, 0.3);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+}
+.field-help { color: var(--color-text-secondary, #888); font-size: 0.78rem; }
+.install-link {
+  display: inline-block;
+  padding: 0.5em 0.9em;
+  background: rgba(0, 195, 64, 0.15);
+  color: #00c340;
+  border-radius: 4px;
+  text-decoration: none;
+  margin: 0.4em 0;
+}
+.install-link:hover { background: rgba(0, 195, 64, 0.25); }
+.wizard-summary { padding: 0.7em; background: rgba(0, 195, 64, 0.10); border-radius: 4px; }
+.wizard-error  { padding: 0.5em 0.7em; background: rgba(228, 1, 56, 0.10); color: #c0392b; border-radius: 4px; }
+.wizard-result { padding: 0.5em 0.7em; background: rgba(0, 195, 64, 0.08); color: #2a7a37; border-radius: 4px; font-size: 0.9rem; }
+.wizard-footer { display: flex; justify-content: flex-end; gap: 0.5em; margin-top: 0.5em; }
+</style>
