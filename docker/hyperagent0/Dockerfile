@@ -108,4 +108,6 @@ VOLUME ["/app/memory", "/app/usr", "/app/logs"]
 EXPOSE 50080
 
 # --systemd: foreground, no PID file (correct for PID 1 in container).
-CMD ["haz", "start", "--systemd", "--host", "0.0.0.0", "--port", "50080"]
+# Host + port come from WEB_UI_HOST + WEB_UI_PORT env vars (set above),
+# not from CMD args, so docker-compose users can override via .env.
+CMD ["haz", "start", "--systemd"]

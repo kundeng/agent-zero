@@ -170,6 +170,13 @@ def command(daemonize: bool, systemd: bool, host: str | None, lan: bool, port: i
     if lan and host not in (None, "0.0.0.0"):
         raise click.UsageError("--lan and --host are mutually exclusive.")
 
+    # Resolve host: explicit flag > WEB_UI_HOST env var > upstream default
+    # (None means run_ui.start_server picks localhost). Docker / compose
+    # deployments set WEB_UI_HOST=0.0.0.0 in the image env so the UI is
+    # reachable from outside the container without needing --host on CMD.
+    if host is None:
+        host = os.environ.get("WEB_UI_HOST") or None
+
     # Standardize on port 50080 across host and container installs.
     # Upstream's run_ui defaults to 5000; overriding here keeps the
     # README's "open http://localhost:50080" advice consistent

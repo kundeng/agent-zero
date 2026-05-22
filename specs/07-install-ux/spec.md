@@ -222,29 +222,32 @@ spec-tracked ways.
 - [x] 0.9 Verified end-to-end in a clean multipass Ubuntu 22.04 VM via
        the real curl|bash URL
 
-### P1 — Must Do
-- [ ] 1.1 Docker image SHOULD honor `WEB_UI_HOST=0.0.0.0` so the
-       compose deployment reaches the LAN. (`haz start --systemd
-       --host 0.0.0.0` already does this; verify env var path.)
-- [x] 1.2 `haz start --lan` — shortcut for `--host 0.0.0.0`. Same
-       effect, less typing, discoverable from `haz start --help`.
-       Documented in README's "LAN access" subsection.
-- [x] 1.3 `haz check` subcommand: reads settings.json, makes a
+### P1 — Must Do (all complete)
+- [x] 1.1 ``haz start`` now reads ``WEB_UI_HOST`` env var
+       (parallel to ``WEB_UI_PORT``). Docker CMD simplified to
+       ``haz start --systemd`` — host + port come from env. Compose
+       users can override via ``.env`` without rebuilding.
+- [x] 1.2 ``haz start --lan`` — shortcut for ``--host 0.0.0.0``.
+       Mutually exclusive with explicit ``--host``. Documented in
+       README's "LAN access" subsection.
+- [x] 1.3 ``haz check`` subcommand: reads settings.json, makes a
        minimal LiteLLM call, prints OK + latency or a one-line
        diagnosis. Exit codes 0/1/2/3/4 cover reachable / no config
        / missing field / network-or-auth fail / unsupported
        provider. claude-sdk path stubbed (exit 4) until spec 02
        adds a real probe.
-- [ ] 1.4 Test: end-to-end curl|bash install in CI (GitHub Actions
-       Ubuntu runner). Replays journey B without LLM keys, asserts
-       UI returns 200 on /. Catches regressions of D4.
-- [ ] 1.5 Test: wheel build excludes `python/`. Build the wheel,
-       open it as a zip, assert there is no `python/` directory.
-- [ ] 1.6 Document the upgrade path inside `README.md` — `curl ... |
-       bash` on an existing install does `git pull` in
-       `~/.hyperagent0/repo` and reinstalls into the existing venv.
-       Already supported by install.sh's "reuse existing venv"
-       branch; just needs the README hint.
+- [x] 1.4 ``.github/workflows/install-smoke.yml`` runs on every
+       push/PR: installs via ``install.sh --dev``, starts daemon,
+       polls ``GET /`` until 200, asserts ``haz check`` exits 1 on
+       no-LLM, runs wheel-contents tests, dumps daemon.log on
+       failure. Branch protection rule recommended once stable.
+- [x] 1.5 ``tests/test_wheel_contents.py`` — builds the wheel into
+       a tmpdir, asserts hyperagent0/ + paths.py are present,
+       asserts no python/ or asset directory leaks, asserts both
+       console_scripts entry points + click runtime dep. 5 tests.
+- [x] 1.6 README's "Updating" table grew a paragraph explaining
+       that install.sh installs editable, so ``git pull`` of the
+       repo is the cheapest update path.
 
 ### P2 — Should Do
 - [ ] 2.1 Compose `.env.example` and `docker-compose.yml` accept
@@ -325,3 +328,18 @@ cover the no-network code paths (settings missing, fields missing,
 flag overrides, provider name prefix logic). Heavy LiteLLM imports
 are deferred into the command body so `haz check --help` still
 satisfies the cold-start budget (only Click is imported).
+
+**2026-05-21** — Closed out the rest of P1: env-var host support
+(P1.1), GitHub Actions smoke workflow (P1.4), wheel-contents
+invariant tests (P1.5), upgrade-path docs (P1.6). The smoke
+workflow runs on every push/PR against v2-hyperagent and main; it
+uses `install.sh --dev` so PR branches actually test their own
+code (raw.githubusercontent.com can't serve un-merged branches).
+The wheel-contents tests live in `tests/test_wheel_contents.py`
+and pin spec 07 D4 — a future PR that re-adds `python*` to
+`packages.find.include` will fail these in CI. Also flipped the
+Docker CMD from `haz start --systemd --host 0.0.0.0 --port 50080`
+to plain `haz start --systemd`, with host/port from env vars in
+the image (`WEB_UI_HOST=0.0.0.0`, `WEB_UI_PORT=50080`). Compose
+users can now override either via `.env` without rebuilding the
+image.

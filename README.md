@@ -92,9 +92,16 @@ and restarts on host reboot.
 
 | Installed via | Update with |
 |---------------|-------------|
-| Option 1 (`docker run`) | `docker pull bayeslearner/hyperagent0:latest` and rerun |
-| Option 2 (`curl ... \| bash`) | Re-run the same curl one-liner. It fast-forwards `~/.hyperagent0/repo` and re-installs in place. |
+| Option 1 (`docker run`) | `docker pull bayeslearner/hyperagent0:latest`, then re-run |
+| Option 2 (`curl ... \| bash`) | Re-run the same one-liner, or just `git -C ~/.hyperagent0/repo pull` |
 | Option 3 (compose) | `docker compose pull && docker compose up -d` |
+
+**About the curl one-liner upgrade**: install.sh installs hyperagent0
+editable against `~/.hyperagent0/repo`, so a plain `git pull` of that
+checkout is the cheapest update — your `haz` binary points into the
+repo directly, so source changes show up immediately. Re-running the
+one-liner does the same `git pull` PLUS refreshes any dependency
+changes; safe to run any time.
 
 ---
 

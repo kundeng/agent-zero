@@ -1,0 +1,113 @@
+# End-to-end smoke test of the curl|bash install (spec 07 P1.4).
+#
+# Replays the user journey from README Option 2 against the current
+# branch on a clean Ubuntu runner: install -> haz start -> assert UI
+# returns 200 -> assert haz check returns the expected "no LLM
+# configured" exit code -> assert the wheel doesn't leak python/.
+#
+# Catches:
+#   - install.sh regressions (preflight failures, dep conflicts, etc.)
+#   - the wheel-bundling-python/ class of bug from spec 01 log
+#   - haz CLI startup failures (missing modules, path resolution bugs)
+#   - cold-start budget regressions in haz status
+
+name: install-smoke
+
+on:
+  push:
+    branches: [v2-hyperagent, main]
+  pull_request:
+    branches: [v2-hyperagent, main]
+  workflow_dispatch:
+
+jobs:
+  install-and-run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run install.sh against this branch's checkout (--dev)
+        run: |
+          # --dev points install.sh at the checked-out source instead
+          # of cloning from a remote branch. This is what makes PR
+          # branches actually test their own code — the curl|bash flow
+          # on a non-merged branch couldn't pull its own install.sh
+          # via raw.githubusercontent.com.
+          ./install.sh --dev --prefix "$HOME/.hyperagent0" --no-link
+        env:
+          # Quiet pip's "no module named" warnings on a fresh setup.
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+      - name: Verify haz CLI surface
+        run: |
+          HAZ="$HOME/.hyperagent0/venv/bin/haz"
+          $HAZ --version
+          $HAZ --help
+
+      - name: Cold-start budget — haz status under 1s on cold start
+        run: |
+          HAZ="$HOME/.hyperagent0/venv/bin/haz"
+          # 1s instead of the 200ms spec target because the runner is
+          # noisier than a local box. The real signal here is
+          # "didn't accidentally import LiteLLM at module load".
+          /usr/bin/time -f '%e' $HAZ status 2> elapsed.txt || true
+          elapsed=$(cat elapsed.txt)
+          echo "haz status: ${elapsed}s"
+          python3 -c "import sys; sys.exit(0 if float('${elapsed}') < 1.0 else 1)"
+
+      - name: Start daemon in background
+        run: |
+          HAZ="$HOME/.hyperagent0/venv/bin/haz"
+          $HAZ start -d
+
+      - name: Wait for UI to serve 200 on / (max 90s)
+        run: |
+          # Poll the UI; uvicorn is up the moment haz start -d exits,
+          # but the actual route handlers need a moment to register.
+          until curl -fsS -o /dev/null http://localhost:50080/; do
+            sleep 2
+          done
+          echo "UI responded."
+          curl -sI http://localhost:50080/ | head -3
+        timeout-minutes: 2
+
+      - name: haz check exits 1 when no LLM configured (no settings file)
+        run: |
+          HAZ="$HOME/.hyperagent0/venv/bin/haz"
+          # Clear settings if a previous step created any.
+          rm -f $HOME/.hyperagent0/repo/usr/settings.json
+          set +e
+          $HAZ check
+          rc=$?
+          set -e
+          echo "haz check exit code: $rc"
+          test "$rc" = "1" || { echo "expected exit 1, got $rc"; exit 1; }
+
+      - name: Run wheel-contents tests (spec 07 D4 invariants)
+        run: |
+          # These build the wheel and assert python/ is not bundled.
+          # Catches anyone re-adding python* to packages.find.include.
+          $HOME/.hyperagent0/venv/bin/pip install --quiet pytest
+          $HOME/.hyperagent0/venv/bin/python -m pytest tests/test_wheel_contents.py -q
+
+      - name: Stop daemon
+        if: always()
+        run: |
+          HAZ="$HOME/.hyperagent0/venv/bin/haz"
+          $HAZ stop || true
+
+      - name: Daemon log on failure
+        if: failure()
+        run: |
+          if [ -f "$HOME/.hyperagent0/logs/daemon.log" ]; then
+            echo "===== daemon.log (last 200 lines) ====="
+            tail -200 "$HOME/.hyperagent0/logs/daemon.log"
+          fi
