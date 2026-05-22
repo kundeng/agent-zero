@@ -3,10 +3,33 @@ import models
 from python.helpers import runtime, settings, defer
 from python.helpers.print_style import PrintStyle
 
-# spec 01-host-first task 1.6: resolve sandbox mode (global default ∘
-# project override) and stash it on AgentConfig.additional so the code
-# execution tool can read it at runtime.
-from hyperagent0.projects import resolve_sandbox_mode, set_agent_sandbox_mode
+# spec 01-host-first task 1.6: stash resolved sandbox mode on
+# AgentConfig.additional so the code execution tool can read it at
+# runtime. spec 05 (per-project sandbox override) was withdrawn, so
+# the resolved mode is just the global setting — no project lookup.
+_VALID_SANDBOX_MODES = ("none", "sandbox", "ssh")
+
+
+def _resolve_sandbox_mode(current_settings) -> str:
+    mode = current_settings.get("sandbox_mode")
+    if mode in _VALID_SANDBOX_MODES:
+        return str(mode)
+    # Backward-compat: legacy ssh_enabled=true → sandbox_mode=ssh.
+    if current_settings.get("ssh_enabled"):
+        return "ssh"
+    return "none"
+
+
+def _set_agent_sandbox_mode(config: AgentConfig, mode: str) -> None:
+    additional = getattr(config, "additional", None) or {}
+    additional["sandbox_mode"] = mode
+    try:
+        config.additional = additional  # type: ignore[attr-defined]
+    except Exception:
+        # AgentConfig dataclasses may not expose ``additional``; degrade
+        # silently because the code-exec tool re-reads settings at run
+        # time anyway.
+        pass
 
 
 def initialize_agent(override_settings: dict | None = None):
@@ -95,10 +118,9 @@ def initialize_agent(override_settings: dict | None = None):
     _set_runtime_config(config, current_settings)
 
     # spec 01-host-first task 1.6: stash resolved sandbox mode for the
-    # code execution tool. At AgentConfig construction time no project is
-    # active yet, so this reflects the global default; projects.activate_project
-    # refreshes it on the context's config when a project is activated.
-    set_agent_sandbox_mode(config, resolve_sandbox_mode(current_settings, None))  # type: ignore[arg-type]
+    # code execution tool. spec 05 (per-project override) was withdrawn,
+    # so the resolved mode is just the global setting.
+    _set_agent_sandbox_mode(config, _resolve_sandbox_mode(current_settings))
 
     # update config with runtime args
     _args_override(config)

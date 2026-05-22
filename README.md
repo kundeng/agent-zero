@@ -118,6 +118,11 @@ haz logs            # tail ~/.hyperagent0/logs/daemon.log
 haz check           # ping the configured LLM, report OK + latency (or a diagnosis)
 haz setup           # OPTIONAL: interactive settings wizard (you can just use the UI)
 haz config          # get / set / path - read or write usr/settings.json fields
+haz channel list    # list registered chat-channel provisioners (slack, telegram, discord)
+haz channel status  # configured / enabled / live status per channel
+haz channel provision <platform> --input k=v ...
+                    # drive the provisioning wizard headlessly
+haz channel apply   # restart channel adapters after a provisioning change
 ```
 
 Both `haz` and `hyperagent0` are registered and behave identically. The
@@ -137,6 +142,39 @@ haz start -d --lan         # binds to 0.0.0.0
 ```bash
 haz check                  # OK (0.42s) — openai/cc/claude-sonnet-4-6 responded.
 ```
+
+---
+
+## Wire up a chat channel
+
+HyperAgent Zero ships generic provisioners for **Slack, Telegram, and Discord**.
+The Settings panel has a new **Channels** tab — same shape as MCP Servers — that
+walks each platform's wizard end-to-end. No editing `channels.json` by hand and
+no `$$secret(...)` syntax to learn.
+
+### Slack (3 clicks + 2 pastes)
+1. Go to https://api.slack.com/apps and generate a configuration access token
+   (the workspace-level `xoxe.xoxp-…` one). Paste it into Settings → Channels →
+   Slack → Provision.
+2. Click the install URL the wizard shows. Click Allow. The popup tab closes
+   itself when the bot token is captured.
+3. Paste the Socket-Mode app-level token (`xapp-…`) from
+   `api.slack.com/apps/<your-app-id>/general#app_level_tokens`. Click Apply.
+
+### Telegram
+1. Open https://t.me/BotFather → `/newbot` → copy the token.
+2. Settings → Channels → Telegram → Provision. Paste the token. Click Apply.
+
+### Discord
+1. https://discord.com/developers/applications → New Application → Bot → copy the
+   token. Copy the Application ID from General Information.
+2. Settings → Channels → Discord → Provision. Paste both. The wizard shows an
+   invite URL — click it, pick your server, confirm. Click Apply.
+
+For headless installs (no browser access), the same flows run from
+`haz channel provision <platform> --input k=v …`. Run
+`haz channel provision slack --show-steps` to see every field the wizard
+expects.
 
 ---
 

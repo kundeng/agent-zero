@@ -195,27 +195,31 @@ const model = {
     const result = resp.result || {};
     this.wizard.result = result;
 
-    // Stash the URL override on the step so the template can render it.
-    if (result.url_override && this.wizard.currentStep) {
-      this.wizard.currentStep.url = result.url_override;
-    }
-
     if (result.terminal) {
-      // Stay on the terminal step; let the user click Apply.
       this._setCurrentStep(this.wizard.currentStepIdx);
       return;
     }
 
+    // Advance to the next step first, THEN stash the URL override on it.
+    // Provisioners emit ``url_override`` describing where the user should
+    // go next, which corresponds to the next step (link_with_callback /
+    // link_with_paste), not the just-submitted input step.
     if (result.next_step) {
       const idx = this._findStepIdx(result.next_step);
       if (idx >= 0) {
         this._setCurrentStep(idx);
+        if (result.url_override && this.wizard.currentStep) {
+          this.wizard.currentStep.url = result.url_override;
+        }
         return;
       }
     }
 
     // No explicit advance — re-render the current step (e.g. install
     // step that just emits the URL).
+    if (result.url_override && this.wizard.currentStep) {
+      this.wizard.currentStep.url = result.url_override;
+    }
     this._setCurrentStep(this.wizard.currentStepIdx);
   },
 
