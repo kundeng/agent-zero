@@ -7,7 +7,6 @@ Covers:
   delivered on channel B.
 * `is_network_error` discrimination (true positives for stdlib transients,
   false for misconfigs).
-* `sandbox_override` written to AgentConfig.additional on new contexts.
 """
 
 from __future__ import annotations
@@ -250,44 +249,6 @@ def test_is_network_error_false_for_misconfigs() -> None:
     assert is_network_error(TypeError("wrong shape")) is False
     assert is_network_error(KeyError("missing")) is False
     assert is_network_error(RuntimeError("misconfig")) is False
-
-
-# ---------------------------------------------------------------------------
-# sandbox_override application
-# ---------------------------------------------------------------------------
-
-
-def test_sandbox_override_writes_to_additional() -> None:
-    """The router should set ``config.additional['sandbox_mode']`` from
-    the channel config's sandbox_override."""
-
-    router = ChannelRouter()
-    ctx = MagicMock()
-    ctx.id = "ctx-abc"
-    ctx.config.additional = {}
-
-    router._apply_sandbox_override(ctx, {"mode": "docker"})
-    assert ctx.config.additional["sandbox_mode"] == "docker"
-
-
-def test_sandbox_override_inherit_is_noop() -> None:
-    router = ChannelRouter()
-    ctx = MagicMock()
-    ctx.id = "ctx-abc"
-    ctx.config.additional = {}
-
-    router._apply_sandbox_override(ctx, {"mode": "inherit"})
-    assert "sandbox_mode" not in ctx.config.additional
-
-
-def test_sandbox_override_missing_mode_is_noop() -> None:
-    router = ChannelRouter()
-    ctx = MagicMock()
-    ctx.id = "ctx-abc"
-    ctx.config.additional = {}
-
-    router._apply_sandbox_override(ctx, {})
-    assert "sandbox_mode" not in ctx.config.additional
 
 
 # ---------------------------------------------------------------------------

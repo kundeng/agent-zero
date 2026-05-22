@@ -71,13 +71,11 @@ Network-failure detection per SDK:
 
 **Why**: Operational reliability. A boot-time DNS flake must not require manual daemon restart.
 
-### D5: Channel↔sandbox config bridge
-**Choice**: `ChannelConfig` gains an optional `project_binding: str | None` (already present from spec 04) and a new optional `sandbox_override: ProjectSandboxSettings | None`. When the router creates a new `AgentContext` for an inbound:
-1. If `project_binding` is set, activate that project (spec 04 behavior)
-2. After project activation, if `sandbox_override` is set on the channel config, *override* the resolved `sandbox_mode` on the new context's `AgentConfig`
-3. The code execution path (spec 01 task 1.5) reads the override at execution time
-
-**Why**: Lets an operator say "Telegram chat 12345 talks to project `home-automation` but always runs code in a `docker` sandbox even though the project default is `none`." Composes spec 04 + spec 05.
+### D5: ~~Channel↔sandbox config bridge~~ — WITHDRAWN 2026-05-22
+Removed when spec 05 was withdrawn. Sandbox mode is now a single global
+setting and there is no per-channel override. `ChannelConfig.sandbox_override`,
+`ChannelRouter._apply_sandbox_override`, and the three associated
+`test_sandbox_override_*` tests were deleted in the same retraction.
 
 ### D6: SQLite migrations
 **Choice**: Replace raw `CREATE TABLE IF NOT EXISTS` with a numbered-migration system. New `hyperagent0/channels/migrations/` directory holds `001_initial.sql`, `002_*.sql`, etc. A `Migrator` class records applied versions in a `schema_migrations` table and applies missing ones at `ThreadStore` open.
@@ -92,38 +90,39 @@ Network-failure detection per SDK:
 ## Tasks
 
 ### P1 — Must Do
-- [ ] 1.1 New dataclasses in `hyperagent0/channels/base.py`:
-  - `DeliveryAddress(channel_type, platform_id, thread_id)`
-  - `InboundEvent(channel_type, platform_id, thread_id, message, reply_to=None)`
-  - Augment `InboundMessage` with `is_mention: bool = False`, `is_group: bool = False`, `kind: Literal["chat", "chat-sdk"] = "chat"`
-  - `ChannelSetup` ABC with the four callbacks (D2)
-- [ ] 1.2 Update `BaseChannel`:
-  - Add `async def setup(self, setup: ChannelSetup) -> None`
-  - Deprecate `on_message` (keep accepting it during transition with a shim that wraps to `on_inbound`)
-- [ ] 1.3 Update `ChannelRouter`:
-  - Implement the four `ChannelSetup` callbacks
-  - `is_mention` check before agent-name regex
-  - Reply delivery honors `event.reply_to` if set (route to that address instead of the inbound's origin)
-- [ ] 1.4 Retry-on-NetworkError around `adapter.setup()` (D4) — `hyperagent0/channels/lifecycle.py`
-- [ ] 1.5 Migration system (D6) — `hyperagent0/channels/migrations/{001_initial.sql,migrator.py}`. `ThreadStore.__init__` calls `Migrator.upgrade()`
-- [ ] 1.6 Channel↔sandbox bridge (D5) — `ChannelConfig.sandbox_override`, router applies it after project activation
-- [ ] 1.7 Update Telegram adapter:
-  - Implement `setup()`
-  - Detect `is_mention` from `message.entities` (D3)
-  - Map platform errors to `NetworkError`-friendly exception types
-- [ ] 1.8 Update Slack adapter:
-  - Implement `setup()`
-  - `app_mention` event sets `is_mention=True`
-- [ ] 1.9 Update Discord adapter:
-  - Implement `setup()`
-  - `message.mentions.<bot>` sets `is_mention=True`
+- [x] 1.1 New dataclasses in `hyperagent0/channels/base.py`:
+  - `DeliveryAddress`, `InboundEvent`, `ChannelSetup` ABC, `InboundMessage` augmented with `is_mention` / `is_group` / `kind`
+  - [src:hyperagent0/channels/base.py:92-174]
+- [x] 1.2 Update `BaseChannel`:
+  - `setup(channel_setup)` shipped; legacy `on_message` accepted via shim in `_dispatch_inbound`
+  - [src:hyperagent0/channels/base.py:212-280]
+- [x] 1.3 Update `ChannelRouter`:
+  - All four `ChannelSetup` callbacks implemented (`on_inbound`, `on_inbound_event`, `on_metadata`, `on_action`)
+  - `require_mention` gate enforces `is_mention` in groups; DMs always pass
+  - `event.reply_to` redirects reply to a different registered adapter (tested)
+- [x] 1.4 Retry-on-NetworkError around `adapter.setup()` (D4) — `hyperagent0/channels/lifecycle.py`
+  - `is_network_error()` discriminator covers stdlib transients + Telegram/Slack/Discord network exception classes
+- [x] 1.5 Migration system (D6) — `hyperagent0/channels/migrations/{001_initial.sql, migrator.py}`
+  - `ThreadStore.__init__` invokes `Migrator.upgrade()`; idempotent re-runs verified
+- [~] 1.6 ~~Channel↔sandbox bridge (D5)~~ — withdrawn 2026-05-22 along with spec 05. Code removed.
+- [x] 1.7 Update Telegram adapter
+  - `setup()` shipped; `_detect_is_mention()` scans `message.entities` for `mention` / `text_mention` resolving to the bot's username
+- [x] 1.8 Update Slack adapter
+  - `setup()` shipped; `app_mention` event + thread `parent_user_id == bot_id` set `is_mention=True`
+- [x] 1.9 Update Discord adapter
+  - `setup()` shipped; `message.mentions` drives `is_mention`
 
 ### P2 — Should Do
-- [ ] 2.1 `on_action` callback for one platform (Telegram inline keyboard buttons) — proves the wiring; Slack blocks/Discord components follow as P3
-- [ ] 2.2 Test: `is_mention` detection — synthetic Telegram update with mention entity, Slack `app_mention`, Discord mention payload
-- [ ] 2.3 Test: `reply_to` routing — inbound from one adapter, reply lands on a different adapter (use a stub `EchoChannel`)
-- [ ] 2.4 Test: `NetworkError` retry — first two `setup()` calls raise, third succeeds; misconfig fails fast
-- [ ] 2.5 Test: migration upgrade — write a v2 migration in a test fixture, confirm schema upgraded idempotently
+- [ ] 2.1 `on_action` callback for one platform (Telegram inline keyboard buttons)
+  - `ChannelSetup.on_action` callback wired on the host side, but **no adapter emits the buttons or fires the callback yet** — grepping the three adapter files for `inline_keyboard` / `InlineKeyboardButton` returns nothing. This is the one genuine P1-adjacent gap remaining in spec 06
+- [x] 2.2 Test: `is_mention` detection
+  - `test_require_mention_blocks_unmentioned_group`, `_passes_mentioned_group`, `_does_not_block_dms`
+- [x] 2.3 Test: `reply_to` routing
+  - `test_reply_to_redirects_to_different_adapter`, `test_no_reply_to_lands_on_inbound_channel`
+- [x] 2.4 Test: `NetworkError` retry
+  - `test_is_network_error_true_for_stdlib_transients` + `_false_for_misconfigs`
+- [x] 2.5 Test: migration upgrade
+  - `test_migrator_applies_initial_then_idempotent`, `test_thread_store_uses_migrator`
 
 ### P3 — Nice to Have
 - [ ] 3.1 `on_action` for Slack (block_actions) and Discord (component interactions)
@@ -139,3 +138,7 @@ Network-failure detection per SDK:
 ## Log
 
 **2026-05-20** — Drafted after spec-04 audit against `/home/kundeng/hyperagent-eval/nanoclaw/src/channels/`. Key references: `adapter.ts:1-100` (the `ChannelSetup` and `InboundEvent` shapes), `channel-registry.ts:55-95` (the retry-on-NetworkError pattern), `db/migrations/012-channel-registration.ts` (migration model). Conflict-surface budget for this spec: **zero** upstream patches in `python/` (D7 may revise this).
+
+**2026-05-22** — Audit pass against committed code. **All P1 (1.1–1.9) shipped** — `DeliveryAddress` / `InboundEvent` / `ChannelSetup` dataclasses in `base.py`, the four router callbacks, `require_mention` enforcement, `is_network_error()` discriminator + retry loop in `lifecycle.py`, numbered SQL migrations in `channels/migrations/`, `sandbox_override` bridge to `AgentConfig.additional`, and all three adapters detect `is_mention` from platform-structured signals. Test file `tests/test_hyperagent0_channels_spec06.py` covers every D-decision (D1–D6) explicitly. **P2 4 of 5 shipped**: 2.2 (is_mention), 2.3 (reply_to), 2.4 (network error), 2.5 (migration upgrade) all have tests. Only **2.1 (`on_action` adapter wire-up)** remains — the host-side callback exists in `ChannelSetup` but no adapter emits inline buttons or invokes the callback. D7 (the `ask_question` integration) stays an Open Question — would only become real once 2.1 is wired. Conflict-surface budget honored: zero upstream `python/` patches.
+
+**2026-05-22 (later)** — **D5 (channel↔sandbox bridge) withdrawn** in lockstep with spec 05 retraction. `ChannelConfig.sandbox_override` field removed, `ChannelRouter._apply_sandbox_override` removed, and the three `test_sandbox_override_*` tests deleted from `test_hyperagent0_channels_spec06.py`. D1–D4 + D6 remain shipped and tested. Spec 06 surface area shrinks but stays cleanly bounded.

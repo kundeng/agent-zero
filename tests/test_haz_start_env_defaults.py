@@ -60,22 +60,22 @@ def test_no_env_vars_no_file_written(isolated_settings, clear_env):
 
 
 def test_sandbox_mode_env_writes_settings(isolated_settings, clear_env, monkeypatch):
-    monkeypatch.setenv("SANDBOX_MODE", "docker")
+    monkeypatch.setenv("SANDBOX_MODE", "sandbox")
     _apply()()
-    assert _read(isolated_settings) == {"sandbox_mode": "docker"}
+    assert _read(isolated_settings) == {"sandbox_mode": "sandbox"}
 
 
 def test_multiple_env_vars_combine(isolated_settings, clear_env, monkeypatch):
     monkeypatch.setenv("CHAT_MODEL_PROVIDER", "openai")
     monkeypatch.setenv("CHAT_MODEL_NAME", "cc/claude-sonnet-4-6")
     monkeypatch.setenv("CHAT_MODEL_API_BASE", "http://proxy:20128")
-    monkeypatch.setenv("SANDBOX_MODE", "podman")
+    monkeypatch.setenv("SANDBOX_MODE", "ssh")
     _apply()()
     assert _read(isolated_settings) == {
         "chat_model_provider": "openai",
         "chat_model_name": "cc/claude-sonnet-4-6",
         "chat_model_api_base": "http://proxy:20128",
-        "sandbox_mode": "podman",
+        "sandbox_mode": "ssh",
     }
 
 
@@ -93,7 +93,7 @@ def test_existing_settings_not_overwritten(isolated_settings, clear_env, monkeyp
     )
     monkeypatch.setenv("CHAT_MODEL_PROVIDER", "openai")
     monkeypatch.setenv("CHAT_MODEL_NAME", "stale-default-from-env")
-    monkeypatch.setenv("SANDBOX_MODE", "docker")
+    monkeypatch.setenv("SANDBOX_MODE", "sandbox")
 
     _apply()()
 
@@ -102,18 +102,18 @@ def test_existing_settings_not_overwritten(isolated_settings, clear_env, monkeyp
     assert data["chat_model_provider"] == "anthropic"
     assert data["chat_model_name"] == "user-picked-via-ui"
     # New field (sandbox_mode) gets the env default.
-    assert data["sandbox_mode"] == "docker"
+    assert data["sandbox_mode"] == "sandbox"
 
 
 def test_empty_env_var_does_not_set_key(isolated_settings, clear_env, monkeypatch):
     """Compose .env often has CHAT_MODEL_PROVIDER= (blank). Treat as unset."""
 
     monkeypatch.setenv("CHAT_MODEL_PROVIDER", "")
-    monkeypatch.setenv("SANDBOX_MODE", "docker")
+    monkeypatch.setenv("SANDBOX_MODE", "sandbox")
     _apply()()
     data = _read(isolated_settings)
     assert "chat_model_provider" not in data
-    assert data.get("sandbox_mode") == "docker"
+    assert data.get("sandbox_mode") == "sandbox"
 
 
 def test_empty_existing_value_gets_replaced(isolated_settings, clear_env, monkeypatch):
@@ -122,6 +122,6 @@ def test_empty_existing_value_gets_replaced(isolated_settings, clear_env, monkey
 
     isolated_settings.parent.mkdir(parents=True, exist_ok=True)
     isolated_settings.write_text(json.dumps({"sandbox_mode": ""}))
-    monkeypatch.setenv("SANDBOX_MODE", "docker")
+    monkeypatch.setenv("SANDBOX_MODE", "sandbox")
     _apply()()
-    assert _read(isolated_settings)["sandbox_mode"] == "docker"
+    assert _read(isolated_settings)["sandbox_mode"] == "sandbox"

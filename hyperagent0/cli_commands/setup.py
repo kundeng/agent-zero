@@ -3,7 +3,7 @@
 Call patterns:
 
   haz setup                          # interactive prompts
-  haz setup --sandbox docker         # write just sandbox_mode
+  haz setup --sandbox sandbox        # write just sandbox_mode
   haz setup --provider openai --model X --api-base Y    # write LLM fields
 
 This command is OPTIONAL. The web UI's Settings panel is the primary
@@ -40,7 +40,7 @@ _INTERACTIVE_DEFAULTS: dict[str, str] = {
     "sandbox_mode": "none",
 }
 
-_VALID_SANDBOX_MODES = ("none", "sandbox", "ssh", "cgroup", "docker", "podman")
+_VALID_SANDBOX_MODES = ("none", "sandbox", "ssh")
 
 
 def _settings_path() -> Path:
@@ -71,7 +71,7 @@ def _save_settings(data: dict) -> None:
     "--sandbox",
     type=click.Choice(_VALID_SANDBOX_MODES, case_sensitive=False),
     default=None,
-    help="code-execution sandbox mode (spec 05)",
+    help="code-execution sandbox mode (none/sandbox/ssh)",
 )
 @click.option(
     "--non-interactive",

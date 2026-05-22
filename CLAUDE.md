@@ -69,9 +69,8 @@ Critical: `pip install hyperagent0` from the wheel alone does NOT work — the w
 | `none` | Local subprocess, no wrapper | `hyperagent0/sandbox/none.py` |
 | `sandbox` | Local subprocess, OS restrictions | `hyperagent0/sandbox/srt.py` (Anthropic `srt`) |
 | `ssh` | Remote process | `hyperagent0/sandbox/ssh.py` |
-| `cgroup` | Local, cgroup-restricted | `hyperagent0/sandbox/cgroup.py` (spec 05) |
-| `docker` | Sibling container | `hyperagent0/sandbox/docker.py` (spec 05) |
-| `podman` | Sibling container (rootless) | `hyperagent0/sandbox/podman.py` (spec 05) |
+
+`sandbox_mode` is a single global setting (`Settings.sandbox_mode`). There is no per-project override — spec 05 was withdrawn on 2026-05-22. The agent's deployment environment determines isolation: agent on host → sandbox runs as srt on host; agent in Docker → sandbox runs as srt inside that Docker.
 
 Legacy `ssh_enabled=true` auto-migrates to `sandbox_mode=ssh` with a one-time deprecation warning.
 
@@ -116,15 +115,17 @@ Legacy `ssh_enabled=true` auto-migrates to `sandbox_mode=ssh` with a one-time de
 
 ## What We're Building (v2-hyperagent specs)
 
+Status legend: **SHIPPED** = P1 in-spec features all merged with tests. **PARTIAL** = some P1 shipped, residual called out in the spec. **DRAFT** = scoped but no code. Audited 2026-05-22 against committed code; the spec's own `## Log` is the per-task source of truth.
+
 | Spec | Status | What it does | Depends on |
 |------|--------|-------------|------------|
-| [01-host-first](specs/01-host-first/spec.md) | DRAFT | Agent runs on host, sandbox only for code exec | — |
+| [01-host-first](specs/01-host-first/spec.md) | SHIPPED | Agent runs on host, sandbox only for code exec | — |
 | [02-claude-sdk](specs/02-claude-sdk/spec.md) | DRAFT | Claude Agent SDK as first-class provider alongside LiteLLM | — |
-| [03-daemon-cli](specs/03-daemon-cli/spec.md) | DRAFT | `hyperagent0 start/stop/status` (alias `haz`), systemd, pip install | 01 |
-| [04-chat-channels](specs/04-chat-channels/spec.md) | DRAFT | Telegram, Slack, Discord channel adapters | 01, 03 |
-| [05-project-isolation](specs/05-project-isolation/spec.md) | DRAFT | Per-project cgroup/Docker sandboxing with resource limits | 01 |
-| [06-channel-hardening](specs/06-channel-hardening/spec.md) | DRAFT | Mention-aware routing, reply-to handling, channel guards | 04 |
-| [07-install-ux](specs/07-install-ux/spec.md) | DRAFT | curl|bash installer, repo path resolver, install user journeys | 01, 03 |
+| [03-daemon-cli](specs/03-daemon-cli/spec.md) | SHIPPED | `hyperagent0 start/stop/status` (alias `haz`), systemd, pip install | 01 |
+| [04-chat-channels](specs/04-chat-channels/spec.md) | SHIPPED | Telegram, Slack, Discord channel adapters (42 tests) | 01, 03 |
+| [05-project-isolation](specs/05-project-isolation/spec.md) | WITHDRAWN | Scrapped 2026-05-22 — sandbox mode is a single global setting; no per-project override, no cgroup/docker/podman backends | 01 |
+| [06-channel-hardening](specs/06-channel-hardening/spec.md) | SHIPPED | Mention-aware routing, reply-to, SQL migrations (only `on_action` adapter wire-up pending; D5 sandbox-override withdrawn with spec 05) | 04 |
+| [07-install-ux](specs/07-install-ux/spec.md) | SHIPPED | curl\|bash installer, repo path resolver, install user journeys | 01, 03 |
 
 ## Dev Conventions
 

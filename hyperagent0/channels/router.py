@@ -10,8 +10,7 @@ router implements. The router:
    mapping in SQLite (``~/.hyperagent0/channels.db``), upgrading the
    schema via the migrator (spec 06 D6) on first open.
 4. Resumes the existing :class:`agent.AgentContext` if one is live, or
-   creates a fresh one (activating the channel-bound project; applying
-   the channel's ``sandbox_override`` per spec 06 D5).
+   creates a fresh one (activating the channel-bound project).
 5. Dispatches the message via ``context.communicate(...)``.
 6. After the agent finishes, ships the reply back via the originating
    channel adapter — or via ``event.reply_to`` if the inbound carried
@@ -402,12 +401,7 @@ class ChannelRouter(ChannelSetup):
         cfg: Optional[ChannelConfig],
         existing: Optional[Dict[str, Any]],
     ) -> tuple[Optional["AgentContext"], Optional[str]]:
-        """Return (context, project_name). Imports agent lazily.
-
-        Spec 06 D5: after project activation, apply
-        ``cfg.sandbox_override`` to the new context's AgentConfig so
-        the code-execution path picks it up.
-        """
+        """Return (context, project_name). Imports agent lazily."""
 
         try:
             from agent import AgentContext  # type: ignore
@@ -415,14 +409,11 @@ class ChannelRouter(ChannelSetup):
             logger.error("agent module not importable: %s", exc)
             return None, None
 
-        # Try to resume.
         if existing:
             ctx = AgentContext.get(existing["context_id"])
             if ctx is not None:
                 return ctx, existing.get("project_name")
 
-        # Fresh context. Use the global AgentConfig the daemon already
-        # built — same pattern run_ui uses for new web UI sessions.
         try:
             import initialize  # type: ignore
 
@@ -450,32 +441,7 @@ class ChannelRouter(ChannelSetup):
                 )
                 project_name = None
 
-        # Spec 06 D5: apply channel-level sandbox override AFTER project
-        # activation, so it wins regardless of project defaults.
-        if cfg is not None and cfg.sandbox_override is not None:
-            self._apply_sandbox_override(ctx, cfg.sandbox_override)
-
         return ctx, project_name
-
-    def _apply_sandbox_override(
-        self, ctx: "AgentContext", override: Dict[str, Any]
-    ) -> None:
-        mode = override.get("mode")
-        if not mode or mode == "inherit":
-            return
-        cfg = getattr(ctx, "config", None)
-        if cfg is None:
-            return
-        # Spec 01 stashes sandbox_mode in AgentConfig.additional to keep
-        # agent.py off the patch list. Same pattern here.
-        additional = getattr(cfg, "additional", None)
-        if isinstance(additional, dict):
-            additional["sandbox_mode"] = mode
-            logger.info(
-                "channel sandbox override applied: %s for context %s",
-                mode,
-                getattr(ctx, "id", "?"),
-            )
 
     async def _dispatch_to_context(
         self, context: "AgentContext", msg: InboundMessage

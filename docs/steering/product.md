@@ -27,6 +27,5 @@ A developer/power user who wants a persistent AI agent managing multiple project
 
 1. `pip install hyperagent-zero && hyperagent-zero start` works on a fresh Linux/macOS machine with no Docker
 2. Agent responds to messages from Telegram and Slack, not just the web UI
-3. Two projects running simultaneously have fully isolated code execution (different containers/cgroups)
-4. Claude Agent SDK with extended thinking works as a provider alongside the existing LiteLLM path
-5. `hyperagent-zero status` shows running projects, active agents, resource usage
+3. Claude Agent SDK with extended thinking works as a provider alongside the existing LiteLLM path
+4. `hyperagent-zero status` shows running projects, active agents, resource usage

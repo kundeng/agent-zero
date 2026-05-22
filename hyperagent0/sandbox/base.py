@@ -25,8 +25,7 @@ class SandboxBackend(ABC):
 
     Today that means returning either :class:`LocalInteractiveSession` or
     :class:`SSHInteractiveSession` (possibly with the command pre-wrapped, as
-    the ``sandbox`` mode does with ``srt``). Future backends added by spec 05
-    will return analogous wrappers around container-spawning sessions.
+    the ``sandbox`` mode does with ``srt``).
     """
 
     #: Mode string this backend implements. Subclasses override.
@@ -38,12 +37,6 @@ class SandboxBackend(ABC):
         project_dir: str | None = None,
         settings: Any = None,
     ) -> None:
-        # ``settings`` is the per-project sandbox config (TypedDict from
-        # python.helpers.projects or the dataclass form from
-        # hyperagent0.sandbox). Backends that don't need it (NoneBackend,
-        # SshBackend) accept and ignore. Container-spawning backends
-        # (spec 05: CgroupBackend, DockerBackend, PodmanBackend) read
-        # resource_limits/network/image from it.
         self.project_dir = project_dir
         self.settings = settings
 

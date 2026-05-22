@@ -9,11 +9,10 @@ What this fork adds on top of upstream agent-zero:
 
 | | |
 |---|---|
-| Host-first architecture | Agent runs natively; containers are a per-project sandbox option, not a requirement |
+| Host-first architecture | Agent runs natively; code-execution sandbox is `none` / `sandbox` (srt) / `ssh`, set globally |
 | Claude Agent SDK provider | First-class alongside LiteLLM, with thinking-block support |
 | Daemon + CLI (`haz` / `hyperagent0`) | `start / stop / status / logs / setup / config` — lazy-loaded, &lt;200ms cold start |
 | Chat channel adapters | Telegram, Slack, Discord with mention-aware routing |
-| Project isolation | Per-project sandbox backends: `none` / `sandbox` / `ssh` / `cgroup` / `docker` / `podman` |
 
 ---
 
@@ -173,17 +172,14 @@ hyperagent-zero/
 │   ├── cli.py                # haz / hyperagent0 entry point
 │   ├── cli_commands/         # lazy-loaded subcommands
 │   ├── daemon.py             # PID file, lock, signal handling
-│   ├── sandbox/              # spec 05 sandbox backends
-│   ├── channels/             # spec 04/06 chat adapters
-│   ├── claude_sdk/           # spec 02 Claude Agent SDK provider
-│   └── projects/             # spec 05 per-project state
+│   ├── sandbox/              # code-exec sandbox backends (none / srt / ssh)
+│   └── channels/             # spec 04/06 chat adapters
 │
 ├── docker/
-│   ├── hyperagent0/          # full daemon image (Options 1 and 3)
-│   └── sandbox/              # slim exec-only image
+│   └── hyperagent0/          # full daemon image (Options 1 and 3)
 │
 ├── install.sh                # one-command host installer (Option 2)
-├── specs/                    # design documents 01–06
+├── specs/                    # design documents 01–07
 └── tests/                    # pytest suite
 ```
 

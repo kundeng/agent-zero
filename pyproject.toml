@@ -32,9 +32,6 @@ claude-sdk = [
     "anthropic>=0.40",
     "claude-agent-sdk",
 ]
-# Spec 05: container-spawning sandbox modes. Lazy-imported in their backends.
-docker = ["docker>=7"]
-podman = ["podman>=4"]
 telegram = ["python-telegram-bot>=21"]
 slack = ["slack-bolt>=1.18"]
 discord = ["discord.py>=2.3"]
@@ -46,8 +43,6 @@ channels = [
 all = [
     "anthropic>=0.40",
     "claude-agent-sdk",
-    "docker>=7",
-    "podman>=4",
     "python-telegram-bot>=21",
     "slack-bolt>=1.18",
     "discord.py>=2.3",

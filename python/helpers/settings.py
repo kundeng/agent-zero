@@ -132,7 +132,6 @@ class Settings(TypedDict):
 
     shell_interface: Literal['local','ssh']
     # spec 01-host-first D2: process-relationship taxonomy for code execution.
-    # Spec 01 ships none/sandbox/ssh; spec 05 broadens to docker/podman/cgroup.
     sandbox_mode: Literal['none', 'sandbox', 'ssh']
     websocket_server_restart_enabled: bool
     uvicorn_access_logs_enabled: bool

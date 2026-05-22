@@ -1,15 +1,8 @@
 import os
-import sys
 from typing import Literal, TypedDict, TYPE_CHECKING, cast
 
 from python.helpers import files, dirty_json, persist_chat, file_tree
 from python.helpers.print_style import PrintStyle
-
-# spec 01-host-first task 1.6: TypedDict NotRequired arrived in 3.11.
-if sys.version_info >= (3, 11):
-    from typing import NotRequired
-else:  # pragma: no cover - we require 3.11+ via pyproject.toml
-    from typing_extensions import NotRequired  # type: ignore
 
 
 if TYPE_CHECKING:
@@ -36,21 +29,6 @@ class SubAgentSettings(TypedDict):
     enabled: bool
 
 
-# spec 01-host-first task 1.6, D5: per-project sandbox override.
-# spec 05 broadens the literal with cgroup/docker/podman and adds the
-# resource_limits / network / image / persist_sandbox keys (all NotRequired
-# to keep the existing JSON files forward-compatible).
-class ProjectSandboxSettings(TypedDict, total=False):
-    mode: Literal[
-        "inherit", "none", "sandbox", "ssh", "cgroup", "docker", "podman"
-    ]
-    # spec 05 additions — all optional in the JSON storage form.
-    resource_limits: dict[str, object]  # cpus, memory, timeout, disk_quota
-    network: object  # "internet" | "local-only" | "none" | dict allowlist
-    image: str
-    persist_sandbox: bool
-
-
 class BasicProjectData(TypedDict):
     title: str
     description: str
@@ -61,7 +39,6 @@ class BasicProjectData(TypedDict):
         "own", "global"
     ]  # in the future we can add cutom and point to another existing folder
     file_structure: FileStructureInjectionSettings
-    sandbox: NotRequired[ProjectSandboxSettings]
 
 class GitStatusData(TypedDict, total=False):
     is_git_repo: bool
@@ -175,13 +152,6 @@ def _default_file_structure_settings():
     )
 
 
-def _default_sandbox_settings() -> ProjectSandboxSettings:
-    # spec 01-host-first D5: new projects default to "inherit" so the
-    # global Settings.sandbox_mode wins until the operator opts into a
-    # per-project override.
-    return ProjectSandboxSettings(mode="inherit")
-
-
 def _normalizeBasicData(data: BasicProjectData) -> BasicProjectData:
     normalized: BasicProjectData = {
         "title": data.get("title", ""),
@@ -195,13 +165,6 @@ def _normalizeBasicData(data: BasicProjectData) -> BasicProjectData:
             _default_file_structure_settings(),
         ),
     }
-    # Preserve the sandbox block if present; spec 01 task 1.6.
-    sandbox_block = data.get("sandbox") if isinstance(data, dict) else None
-    if sandbox_block is None:
-        sandbox_block = _default_sandbox_settings()
-    elif "mode" not in sandbox_block:
-        sandbox_block = {**sandbox_block, "mode": "inherit"}  # type: ignore[assignment]
-    normalized["sandbox"] = sandbox_block  # type: ignore[typeddict-item]
     return normalized
 
 
@@ -225,13 +188,6 @@ def _normalizeEditData(data: EditProjectData) -> EditProjectData:
         ),
         "subagents": data.get("subagents", {}),
     }
-    # spec 01-host-first task 1.6: preserve the sandbox block round-trip.
-    sandbox_block = data.get("sandbox") if isinstance(data, dict) else None
-    if sandbox_block is None:
-        sandbox_block = _default_sandbox_settings()
-    elif "mode" not in sandbox_block:
-        sandbox_block = {**sandbox_block, "mode": "inherit"}  # type: ignore[assignment]
-    normalized["sandbox"] = sandbox_block  # type: ignore[typeddict-item]
     return normalized
 
 
@@ -362,22 +318,6 @@ def activate_project(context_id: str, name: str, *, mark_dirty: bool = True):
         CONTEXT_DATA_KEY_PROJECT,
         {"name": name, "title": display_name, "color": data.get("color", "")},
     )
-
-    # spec 01-host-first task 1.6: refresh the resolved sandbox mode on the
-    # context's AgentConfig so the code execution tool picks up the project
-    # override on its next prepare_state() call. Also covers the scheduler
-    # path: task_scheduler.__new_context → projects.activate_project.
-    try:
-        from hyperagent0.projects import resolve_sandbox_mode, set_agent_sandbox_mode
-        from python.helpers import settings as _settings
-
-        resolved = resolve_sandbox_mode(_settings.get_settings(), name)  # type: ignore[arg-type]
-        if context.config is not None:
-            set_agent_sandbox_mode(context.config, resolved)
-    except Exception as e:
-        # Refresh is a best-effort optimization — fall through to the
-        # global default rather than block project activation.
-        PrintStyle.error(f"sandbox-mode refresh failed for project {name!r}: {e}")
 
     # persist
     persist_chat.save_tmp_chat(context)

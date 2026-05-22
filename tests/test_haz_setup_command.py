@@ -36,11 +36,11 @@ def test_flag_only_writes_only_specified_fields(isolated_settings):
     """--sandbox docker should write *only* sandbox_mode, nothing else."""
 
     runner = CliRunner()
-    result = runner.invoke(setup_cmd.command, ["--sandbox", "docker"])
+    result = runner.invoke(setup_cmd.command, ["--sandbox", "sandbox"])
     assert result.exit_code == 0, result.output
 
     data = _read(isolated_settings)
-    assert data == {"sandbox_mode": "docker"}, f"unexpected keys: {data}"
+    assert data == {"sandbox_mode": "sandbox"}, f"unexpected keys: {data}"
 
 
 def test_multiple_flags_combine(isolated_settings):
@@ -64,13 +64,13 @@ def test_preserves_existing_unrelated_fields(isolated_settings):
     )
 
     runner = CliRunner()
-    result = runner.invoke(setup_cmd.command, ["--sandbox", "podman"])
+    result = runner.invoke(setup_cmd.command, ["--sandbox", "ssh"])
     assert result.exit_code == 0, result.output
 
     data = _read(isolated_settings)
     assert data["existing_field"] == "keep_me"
     assert data["another"] == 42
-    assert data["sandbox_mode"] == "podman"
+    assert data["sandbox_mode"] == "ssh"
 
 
 def test_empty_api_base_clears_field(isolated_settings):

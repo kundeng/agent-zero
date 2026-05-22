@@ -53,18 +53,22 @@ def _resolve_sandbox_mode_with_legacy(agent_config) -> str:
     """Return the effective sandbox_mode for this agent's code exec.
 
     Resolution:
-    1. ``AgentConfig.additional['sandbox_mode']`` if set (plumbed by
-       initialize.py from settings + project resolve, task 1.6).
+    1. Global ``Settings.sandbox_mode`` if set.
     2. Auto-migrate legacy ``code_exec_ssh_enabled=True`` → ``"ssh"`` with
        a one-time deprecation warning.
     3. Default ``"none"``.
     """
     global _legacy_ssh_warning_emitted
-    from hyperagent0.projects import get_agent_sandbox_mode
 
-    resolved = get_agent_sandbox_mode(agent_config, default="")
-    if resolved:
-        return resolved
+    try:
+        from python.helpers import settings as _settings
+
+        global_mode = str(_settings.get_settings().get("sandbox_mode") or "")
+    except Exception:
+        global_mode = ""
+
+    if global_mode:
+        return global_mode
 
     if getattr(agent_config, "code_exec_ssh_enabled", False):
         if not _legacy_ssh_warning_emitted:

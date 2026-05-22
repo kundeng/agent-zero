@@ -20,9 +20,8 @@
 **Choice**: Add `ClaudeSDKWrapper` as an alternative to `LiteLLMChatWrapper`. User picks via `chat_model_provider=claude-sdk`.
 **Why**: LiteLLM gives raw chat completions. Claude SDK gives extended thinking, native tool use, streaming tool results, and built-in MCP. Both paths coexist — LiteLLM for proxy/non-Claude, SDK for direct Claude.
 
-### D3: cgroup v2 as primary sandbox on Linux
-**Choice**: `systemd-run --user` + `unshare --mount` for per-project isolation. Docker as fallback.
-**Why**: Near-instant startup (vs 1-3s for Docker), no daemon dependency, no root needed. Available on Ubuntu 22.04+, Fedora 31+. macOS falls back to Docker.
+### D3: ~~cgroup v2 as primary sandbox on Linux~~ — WITHDRAWN 2026-05-22
+Spec 05 (project-isolation) was retracted. Sandbox mode is a single global setting (`none` / `sandbox` / `ssh`) inherited from the agent's deployment environment. No per-project containers, no cgroup/docker/podman backends. See `specs/05-project-isolation/spec.md` for the WITHDRAWN notice.
 
 ### D4: Click-based CLI
 **Choice**: `click` for CLI (hyperagent-zero start/stop/status/etc).

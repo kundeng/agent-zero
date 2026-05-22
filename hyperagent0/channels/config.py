@@ -83,15 +83,11 @@ class ChannelConfig:
     can pull adapter-specific extras (e.g. Slack app token) without us
     needing a typed field for every platform.
 
-    Spec 06 additions:
+    Spec 06 addition:
 
     * ``require_mention`` — when True, ignore group/channel messages that
       don't carry a platform-confirmed bot mention (D3). DMs always pass.
       Defaults to False (preserving spec-04 behavior).
-    * ``sandbox_override`` — when set, the router forces this sandbox
-      mode on contexts created for this channel, regardless of project
-      defaults (D5). Same shape as ``ProjectSandboxSettings`` in
-      :mod:`python.helpers.projects`.
     """
 
     name: str
@@ -101,9 +97,7 @@ class ChannelConfig:
     allowed_chats: list[str] = field(default_factory=list)
     project_binding: Dict[str, str] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
-    # ---- spec 06 D3/D5 additions ----
     require_mention: bool = False
-    sandbox_override: Optional[Dict[str, Any]] = None
 
     def is_user_allowed(self, user_id: str) -> bool:
         """True iff the user is allowed to talk to this channel.
@@ -146,8 +140,6 @@ class ChannelConfig:
 def _coerce_channel_dict(name: str, raw: Any) -> Optional[ChannelConfig]:
     if not isinstance(raw, dict):
         return None
-    sandbox_raw = raw.get("sandbox_override")
-    sandbox_override = sandbox_raw if isinstance(sandbox_raw, dict) else None
     return ChannelConfig(
         name=name,
         enabled=bool(raw.get("enabled", False)),
@@ -157,7 +149,6 @@ def _coerce_channel_dict(name: str, raw: Any) -> Optional[ChannelConfig]:
         project_binding=dict(raw.get("project_binding", {}) or {}),
         raw=raw,
         require_mention=bool(raw.get("require_mention", False)),
-        sandbox_override=sandbox_override,
     )
 
 
