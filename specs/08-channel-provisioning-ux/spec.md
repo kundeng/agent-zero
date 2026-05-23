@@ -204,6 +204,31 @@ The `SecretsBridge` in `ProvisionContext` writes only into the declared set — 
 
 **Why**: The wizard description is the source of truth for "what inputs does this platform need?" — the CLI shouldn't re-encode that information. Headless installs (Docker on a server, CI) get the same provisioning power as the UI without separate code paths.
 
+### D10: Slack install model — paste-manifest in UI is the primary path
+
+**Added 2026-05-23 after live-test discovery.**
+
+The original D3/D4 design assumed Slack's `/oauth/v2/authorize` flow would work for capturing the bot token after the user clicks Allow. Live testing against the BayesLearner workspace proved this is wrong for the common case:
+
+1. Apps created via `apps.manifest.create` with a workspace config token are **non-distributable** by default. Their `oauth_authorize_url` returns `invalid_team_for_non_distributed_app` even with the correct `&team=<id>` appended. OAuth v2 simply does not accept non-distributable apps.
+2. Worse: those API-created apps are **orphans** — they don't appear in any user's "Your Apps" list at https://api.slack.com/apps because they were not created by an interactive developer session. The user cannot install them through the Slack admin UI either, because they can't find them.
+3. Slack's CLI has a `slack app install` command, but `slack login` returns "This workspace is not eligible for the next generation Slack platform" for any workspace not enrolled in Slack's developer program (most free + standard paid plans).
+4. The Slack API has an `apps.install` endpoint, but it returns `not_allowed_token_type` for config tokens — it only accepts admin user tokens (which the CLI mints, but the CLI is locked).
+
+**Choice**: For personal/standard workspaces (the common case), the wizard generates the manifest JSON but does **not** call `apps.manifest.create`. Instead, it instructs the user to:
+
+1. Go to https://api.slack.com/apps → click "Create New App" → "From a manifest" → paste the JSON we generate.
+2. Land on the new app's page (now owned by their developer identity). Sidebar → "Install App" → "Install to Workspace" → Allow. The bot token is displayed; user copies it.
+3. Paste the bot token back. Wizard writes it to secrets.
+4. User generates the `xapp-` Socket Mode token via the same app page's "Basic Information → App-Level Tokens → Generate" UI (no API for this — Slack-enforced).
+5. Paste xapp- back. Wizard writes it. Channel adapter restarts. Bot live.
+
+For **distributable** apps (Slack App Directory listing or enterprise-internal distribution), the original OAuth callback flow still works. The wizard should detect `is_distributable` in the manifest and only show the OAuth auto-capture step on that path.
+
+**Why**: Honest about Slack's design. The bot-install step is a Slack-enforced security boundary; no token, CLI, or API call gets around it for non-distributable apps. The paste-manifest flow is what every Slack chatbot project I checked actually uses — including NanoClaw. The original "3 clicks, fully automated" promise in D3 was based on a wrong assumption about OAuth v2 scope. This decision documents the correction.
+
+**Implementation status (2026-05-23)**: code currently still does the apps.manifest.create call (D3 path), which creates orphan apps. **Next session must rework the Slack wizard** to skip the create step and just hand the user the manifest JSON to paste in their UI. The OAuth callback handler can stay for distributable apps but should be gated.
+
 ### D9: Adapter hardening while we're here
 
 **Choice**: Close two small known gaps in `hyperagent0/channels/slack.py` flagged by `NEXT_SESSION_SLACK.md`:
@@ -328,6 +353,12 @@ The `SecretsBridge` in `ProvisionContext` writes only into the declared set — 
 - [ ] 2.11 README — short "Wire a chat channel in 3 clicks" section pointing at the Channels tab; one example each for Slack / Telegram / Discord
 - [ ] 2.12 `docs/steering/pillars.md` — bump the **MVP/Ship** entry to note channel-provisioning UX is the user-facing milestone for the channels epic; bump **Test** to note framework + 3 provisioners covered
 
+### P2.5 — Live-test corrections (next session must do)
+
+- [ ] 2.5.1 Slack wizard: implement D10 path. Detect whether the user wants distributable or single-workspace; on single-workspace, **skip** `apps.manifest.create` and present the manifest JSON as a copy-block with paste-back instructions. Don't create orphan apps.
+- [ ] 2.5.2 Daemon's slack-bolt `invalid_auth` issue: isolate which runtime element (uvicorn, init_a0, mounts) poisons slack-bolt's HTTP path. Standalone works, daemon doesn't, individual imports + thread+loop pattern don't reproduce. Most likely a middleware or signal-handler issue in the uvicorn boot.
+- [ ] 2.5.3 Provide `haz slack run` standalone-mode command that boots only the channels stack (no UI, no LLM) for cases where the user wants a chat bot without the rest of agent-zero. Equivalent to `/tmp/slack-standalone.py` from the live test, but production-quality.
+
 ### P3 — Nice to Have
 
 - [ ] 3.1 Persist Slack refresh-token (opt-in) so users can rebuild the app from the UI later without going back to api.slack.com
@@ -353,3 +384,13 @@ The `SecretsBridge` in `ProvisionContext` writes only into the declared set — 
 **2026-05-22 (P1 complete)** — Slack provisioner (1.14–1.16) + adapter hardening (1.17) + Web UI (1.18–1.22) + CLI shim (1.23) all shipped on top of the framework. Committed as ``9bc9871``. End-to-end smoke verified: 4-step Slack flow walked with mocked HTTP writes all 7 secrets into ``usr/secrets.env``, populates ``channels.json`` with placeholder-only references, and never persists the config-access token. ``haz channel --help`` cold-start measured at ~17ms (well under the spec 03 D5 200ms budget).
 
 **2026-05-22 (P2)** — Telegram (2.1) and Discord (2.2) provisioners added, each as a single class file with ``register_provisioner`` at the bottom. Eight test files (2.3–2.10) added: framework registry, context+bridges, Slack provisioner (20 tests), Telegram (11), Discord (12), Slack-adapter hardening (11), CLI shim (11). 101 new tests + 54 pre-existing = 155 passing. README updated with the "Wire up a chat channel" section (P2.6). ``docs/steering/pillars.md`` reflects the MVP/Ship + Test pillar advances (P2.7). Adding a fourth platform now needs one new class + one ``register_provisioner`` call — the framework claim holds.
+
+**2026-05-23 (live-test against bayeslearner workspace)** —
+- Drove the Slack wizard end-to-end against the user's real workspace using their config-access token (`xoxe.xoxp-…` minted at https://api.slack.com/apps).
+- Created 4 apps via `apps.manifest.create` (A0B5PS8P2HG, A0B5MQPF0A2, A0B5HGVKKS7, A0B5Q702BA6). Each `oauth_authorize_url` failed with `invalid_team_for_non_distributed_app` — Slack does not run the OAuth v2 install flow for non-distributable apps. **Wizard's `install` step (kind=link_with_callback) is dead code for this app type.**
+- The four apps were INVISIBLE in the user's "Your Apps" list at api.slack.com/apps — config-token-created apps are orphans not owned by any developer identity. No path through Slack admin UI to install them. All four deleted via `apps.manifest.delete`.
+- Pivoted to "create app via UI from manifest" flow. User created app A0B5V01R4TE interactively from the JSON manifest we generate. That app DID appear in their UI with a working Install button. Captured `xoxb-` + `xapp-` via paste-back.
+- **Bot is live** in bayeslearner workspace as @hazbot. Round-trips messages via the spec-04 SlackChannel adapter, running as a standalone Python process (`/tmp/slack-standalone.py`, mirrors lifecycle.py's invocation).
+- **Bug found in live test**: spec-04 SlackChannel dispatched twice per @-mention because Slack fires both `message` and `app_mention` events for the same envelope. Fixed in `slack.py:_on_message` to skip when text contains bot mention token (then `_on_app_mention` handles it). Regression test added in `test_hyperagent0_channels_slack_hardening.py`.
+- **Known issue (unresolved this session)**: when the same SlackChannel adapter runs inside the full daemon process (`haz start`), Socket Mode connection returns `invalid_auth` from `apps.connections.open`. Bisection ruled out individual upstream imports + the thread+loop pattern. The standalone runtime works perfectly. Root cause is somewhere in the full daemon's runtime (uvicorn + init_a0 + …) but I couldn't isolate it in this session. Daemon path is documented as known-broken; standalone runtime works as a temporary workaround.
+- Added decision **D10** documenting the Slack install-model truth: paste-manifest-in-UI is primary, OAuth callback is for distributable apps only. **Next session must rework the wizard** to skip the apps.manifest.create call for non-distributable apps and just hand the user the JSON manifest with paste-back instructions. The current wizard creates orphans the user can't manage.

@@ -187,7 +187,7 @@ class SlackChannel(BaseChannel):
             return None
 
         @self._app.event("app_mention")
-        async def _on_app_mention(event, body, _say) -> None:
+        async def _on_app_mention(event, body) -> None:
             # Drop duplicate redeliveries before doing any work.
             if adapter._is_duplicate_event(_event_envelope_id(event, body)):
                 return
@@ -201,7 +201,7 @@ class SlackChannel(BaseChannel):
             await adapter._dispatch_inbound(inbound)
 
         @self._app.event("message")
-        async def _on_message(event, body, _say) -> None:
+        async def _on_message(event, body) -> None:
             # Drop duplicate redeliveries.
             if adapter._is_duplicate_event(_event_envelope_id(event, body)):
                 return
@@ -211,11 +211,16 @@ class SlackChannel(BaseChannel):
             # Spec 08 D9: drop our own bot's replies before they loop.
             if adapter._is_own_message(event):
                 return
-            # If our bot's user_id appears in the text payload as a
-            # ``<@UXXXXXX>`` token, that's also a mention.
             text = str(event.get("text", "") or "")
-            mention = bool(self._bot_user_id) and f"<@{self._bot_user_id}>" in text
-            inbound = _make_inbound(event, is_mention=mention)
+            # If our bot is mentioned in the text, the ``app_mention``
+            # event handler above will fire for the same envelope and
+            # dispatch the inbound — skip here to avoid two replies
+            # per @-mention. Slack delivers BOTH event types for a
+            # single mention; this is by design but we only want one
+            # router pass.
+            if bool(self._bot_user_id) and f"<@{self._bot_user_id}>" in text:
+                return
+            inbound = _make_inbound(event, is_mention=False)
             await adapter._dispatch_inbound(inbound)
 
         self._handler = AsyncSocketModeHandler(self._app, app_token)

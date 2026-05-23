@@ -148,28 +148,44 @@ haz check                  # OK (0.42s) — openai/cc/claude-sonnet-4-6 responde
 ## Wire up a chat channel
 
 HyperAgent Zero ships generic provisioners for **Slack, Telegram, and Discord**.
-The Settings panel has a new **Channels** tab — same shape as MCP Servers — that
-walks each platform's wizard end-to-end. No editing `channels.json` by hand and
-no `$$secret(...)` syntax to learn.
+The Settings panel has a **Channels** tab — same shape as MCP Servers — that
+walks each platform's wizard end-to-end. Generated tokens land in
+`usr/secrets.env` with `$$secret(...)` placeholders in
+`~/.hyperagent0/channels.json`, mirroring upstream agent-zero's conventions
+for everything else.
 
-### Slack (3 clicks + 2 pastes)
-1. Go to https://api.slack.com/apps and generate a configuration access token
-   (the workspace-level `xoxe.xoxp-…` one). Paste it into Settings → Channels →
-   Slack → Provision.
-2. Click the install URL the wizard shows. Click Allow. The popup tab closes
-   itself when the bot token is captured.
-3. Paste the Socket-Mode app-level token (`xapp-…`) from
-   `api.slack.com/apps/<your-app-id>/general#app_level_tokens`. Click Apply.
-
-### Telegram
-1. Open https://t.me/BotFather → `/newbot` → copy the token.
+### Telegram (easiest — 30 seconds, no admin UI dance)
+1. Open https://t.me/BotFather, send `/newbot`, follow prompts, copy the token.
 2. Settings → Channels → Telegram → Provision. Paste the token. Click Apply.
+3. Message the bot in Telegram.
 
-### Discord
-1. https://discord.com/developers/applications → New Application → Bot → copy the
-   token. Copy the Application ID from General Information.
+### Discord (1 minute)
+1. https://discord.com/developers/applications → New Application → Bot → copy
+   the token. Copy the Application ID from General Information.
 2. Settings → Channels → Discord → Provision. Paste both. The wizard shows an
    invite URL — click it, pick your server, confirm. Click Apply.
+
+### Slack (longer, see caveat)
+
+Slack's developer experience is famously rough for first-time installs. The
+practical flow for a **personal / standard workspace** today:
+
+1. Generate the manifest JSON (Settings → Channels → Slack → Provision will
+   show it as a copy-block; or run `haz channel provision slack --show-manifest`
+   from the CLI in a future release).
+2. Open https://api.slack.com/apps → Create New App → From a manifest → paste
+   the JSON → Create.
+3. On the new app's page, sidebar → Install App → Install to Workspace → Allow.
+   Copy the **Bot User OAuth Token** (`xoxb-...`).
+4. Same app's page, Basic Information → App-Level Tokens → Generate Token and
+   Scopes → add scope `connections:write` → Generate. Copy the `xapp-...`.
+5. Paste both back into the wizard. Click Apply.
+
+If your workspace is enrolled in Slack's **next-generation platform** (paid
+plans + developer-program enrollment) the wizard can drive `slack app install`
+via the Slack CLI for steps 2–3. Most workspaces aren't enrolled. See
+`specs/08-channel-provisioning-ux/spec.md` decision D10 for the gory details
+of why Slack non-distributable apps cannot be installed via API or OAuth v2.
 
 For headless installs (no browser access), the same flows run from
 `haz channel provision <platform> --input k=v …`. Run

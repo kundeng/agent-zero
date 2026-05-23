@@ -85,18 +85,31 @@ def test_step_config_token_happy_path(isolated_env):
     ctx = _make_ctx(isolated_env["channels_path"])
     p = slack_provisioner.SlackProvisioner()
 
-    payload = {
-        "ok": True,
-        "app_id": "A0SLACK",
-        "credentials": {
-            "client_id": "CID",
-            "client_secret": "CSEC",
-            "signing_secret": "SSEC",
-            "verification_token": "VTOK",
-        },
-        "oauth_authorize_url": "https://slack.com/oauth/v2/authorize?client_id=CID",
-    }
-    with patch.object(slack_api.urllib.request, "urlopen", return_value=_mocked_response(payload)):
+    # Two HTTP calls in sequence: apps.manifest.create, then auth.test
+    # for team_id discovery.
+    responses = iter(
+        [
+            _mocked_response(
+                {
+                    "ok": True,
+                    "app_id": "A0SLACK",
+                    "credentials": {
+                        "client_id": "CID",
+                        "client_secret": "CSEC",
+                        "signing_secret": "SSEC",
+                        "verification_token": "VTOK",
+                    },
+                    "oauth_authorize_url": "https://slack.com/oauth/v2/authorize?client_id=CID",
+                }
+            ),
+            _mocked_response({"ok": True, "team_id": "T0WORK", "team": "acme"}),
+        ]
+    )
+    with patch.object(
+        slack_api.urllib.request,
+        "urlopen",
+        side_effect=lambda *a, **kw: next(responses),
+    ):
         result = p.provision(
             "config_token",
             {
@@ -113,6 +126,9 @@ def test_step_config_token_happy_path(isolated_env):
     assert result.url_override is not None
     assert "state=" in result.url_override
     assert result.state_token is not None
+    # team= must be appended — Slack rejects the install with
+    # invalid_team_for_non_distributed_app otherwise.
+    assert "team=T0WORK" in result.url_override
 
     # Credentials persisted.
     secrets_text = (isolated_env["base"] / "usr" / "secrets.env").read_text()
@@ -183,6 +199,7 @@ def test_step_config_token_rotates_on_expired(isolated_env):
             "oauth_authorize_url": "https://slack.com/install",
         }
     )
+    team_resp = _mocked_response({"ok": True, "team_id": "T0X"})
 
     call_count = {"n": 0}
 
@@ -192,7 +209,9 @@ def test_step_config_token_rotates_on_expired(isolated_env):
             return expired_resp
         if call_count["n"] == 2:
             return rotate_resp
-        return success_resp
+        if call_count["n"] == 3:
+            return success_resp
+        return team_resp
 
     with patch.object(slack_api.urllib.request, "urlopen", side_effect=_seq):
         result = p.provision(
@@ -207,7 +226,8 @@ def test_step_config_token_rotates_on_expired(isolated_env):
 
     assert result.error is None
     assert result.next_step == "install"
-    assert call_count["n"] == 3
+    # 4 calls: manifest-create-failed, rotate, manifest-create-success, auth.test
+    assert call_count["n"] == 4
     # New refresh token landed in session for any future rotation.
     assert ctx.session["refresh_token"] == "xoxe-new-refresh"
 

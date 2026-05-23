@@ -50,6 +50,7 @@ from .slack_api import (
     SlackTokenExpiredError,
     auth_test,
     chat_post_message,
+    config_token_team_info,
     create_app_from_manifest,
     exchange_oauth_code,
     rotate_config_token,
@@ -384,10 +385,32 @@ class SlackProvisioner(BaseProvisioner):
         ctx.session[_K_INSTALL_URL] = install_url
 
         # Mint a CSRF state token Slack will return in the redirect
-        # query string; we embed it in the install URL.
+        # query string; we embed it in the install URL. Also append
+        # ``team=<id>`` (resolved via auth.test on the config token)
+        # because apps created via ``apps.manifest.create`` are pinned
+        # to a single workspace and Slack rejects the install URL with
+        # ``invalid_team_for_non_distributed_app`` if the team param is
+        # missing. We fetch the team id at install-URL-build time rather
+        # than passing it through the wizard so the operator never has
+        # to know their workspace id.
         state = ctx.new_state_token()
+        team_id = ""
+        try:
+            team_payload = config_token_team_info(config_token)
+            team_id = str(team_payload.get("team_id") or "")
+        except SlackApiError as exc:
+            # auth.test on a config token is well-supported, but if it
+            # ever stops working we'd rather show the link without team=
+            # and let the user retry than surface an opaque error.
+            logger.warning(
+                "config_token_team_info failed (%s); install URL will "
+                "omit team= and may show invalid_team_for_non_distributed_app",
+                exc.code,
+            )
         sep = "&" if "?" in install_url else "?"
         full_install_url = f"{install_url}{sep}state={state}"
+        if team_id:
+            full_install_url = f"{full_install_url}&team={team_id}"
 
         return StepResult(
             next_step="install",

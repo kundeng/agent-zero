@@ -335,6 +335,19 @@ def try_mint_app_token(
     return str(token) if token else None
 
 
+def config_token_team_info(config_token: str) -> dict[str, Any]:
+    """Call ``auth.test`` with a config-access token to discover the team_id.
+
+    Slack's ``apps.manifest.create`` returns an OAuth authorize URL that
+    omits the ``team=`` query parameter. Without it, Slack rejects the
+    install with ``invalid_team_for_non_distributed_app`` because the app
+    is pinned to a single workspace. We call ``auth.test`` on the config
+    token to discover the workspace id and append it to the install URL.
+    """
+
+    return _post_json("auth.test", {}, bearer=config_token)
+
+
 def chat_post_message(
     bot_token: str, channel: str, text: str
 ) -> dict[str, Any]:

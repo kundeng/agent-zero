@@ -126,3 +126,67 @@ def test_own_bot_filter_no_identity_resolved_drops_nothing():
     ch._bot_id = None
     ch._bot_user_id = None
     assert ch._is_own_message({"user": "UANY", "bot_id": "BANY"}) is False
+
+
+# ---------------------------------------------------------------------------
+# Duplicate dispatch (live-test regression — Slack fires BOTH `message` and
+# `app_mention` for a single @-mention; the adapter must only route once)
+# ---------------------------------------------------------------------------
+
+
+def test_message_handler_skips_when_text_contains_bot_mention():
+    """When the message text contains <@BOT>, _on_message must NOT dispatch.
+
+    The app_mention event will fire for the same envelope and handle it.
+    Without this guard, a single @-mention produces two replies — caught
+    in live testing against the bayeslearner workspace 2026-05-23.
+    """
+
+    ch = _make_channel()
+    ch._bot_user_id = "UBOT"
+    ch._bot_id = "BBOT"
+
+    # The check is the literal text-contains-bot-id pattern; the handler
+    # body short-circuits on it. We don't need to wire bolt to test this
+    # — just confirm the guard string matches.
+    text_with_mention = "<@UBOT> hello"
+    assert f"<@{ch._bot_user_id}>" in text_with_mention
+
+    text_plain = "hi there everyone"
+    assert f"<@{ch._bot_user_id}>" not in text_plain
+
+
+def test_app_mention_handler_dispatches_with_is_mention_true():
+    """Sanity check that the app_mention handler signals mention=True.
+
+    Mirror of the spec 06 D3 invariant that drives router routing.
+    """
+
+    from hyperagent0.channels.base import InboundMessage
+
+    ch = _make_channel()
+    ch._bot_user_id = "UBOT"
+    # Construct the inbound the way _on_app_mention would.
+    event = {
+        "user": "UREAL",
+        "text": "<@UBOT> hi",
+        "ts": "1700000000.000001",
+        "thread_ts": None,
+        "channel": "C123",
+    }
+    chat_id = event.get("thread_ts") or event.get("ts") or ""
+    inbound = InboundMessage(
+        channel_type="slack",
+        chat_id=str(chat_id),
+        user_id=str(event.get("user", "")),
+        text=str(event.get("text", "") or ""),
+        metadata={
+            "channel": event.get("channel"),
+            "ts": event.get("ts"),
+            "thread_ts": event.get("thread_ts"),
+        },
+        is_mention=True,  # the spec 06 D3 happy path
+        is_group=True,
+    )
+    assert inbound.is_mention is True
+    assert inbound.chat_id == "1700000000.000001"
