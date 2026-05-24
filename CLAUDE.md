@@ -126,6 +126,17 @@ Status legend: **SHIPPED** = P1 in-spec features all merged with tests. **PARTIA
 | [05-project-isolation](specs/05-project-isolation/spec.md) | WITHDRAWN | Scrapped 2026-05-22 — sandbox mode is a single global setting; no per-project override, no cgroup/docker/podman backends | 01 |
 | [06-channel-hardening](specs/06-channel-hardening/spec.md) | SHIPPED | Mention-aware routing, reply-to, SQL migrations (only `on_action` adapter wire-up pending; D5 sandbox-override withdrawn with spec 05) | 04 |
 | [07-install-ux](specs/07-install-ux/spec.md) | SHIPPED | curl\|bash installer, repo path resolver, install user journeys | 01, 03 |
+| [08-channel-provisioning-ux](specs/08-channel-provisioning-ux/spec.md) | PARTIAL | Settings → Channels UI tab + `haz channel` CLI + Slack/Telegram/Discord provisioners (157 tests). **Slack wizard creates orphan apps on non-distributable workspaces — D10 documents the pivot to paste-manifest flow that next session must implement.** Bot verified live in bayeslearner via standalone runtime, not full daemon (`invalid_auth` issue in daemon is unresolved). | 04, 06 |
+
+### Setting up Slack — read the runbook first
+
+Slack's developer onboarding is the most painful part of this codebase to
+work with. Before touching the Slack wizard, read
+[docs/channels/slack-setup.md](docs/channels/slack-setup.md) — it has the
+operator runbook for the working install flow, the three Slack design
+choices that bit us in live testing, and the troubleshooting matrix for
+each error message. The session that produced spec 08 D10 took hours;
+that doc is the artifact of those hours so they don't have to repeat.
 
 ## Dev Conventions
 

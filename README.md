@@ -165,27 +165,25 @@ for everything else.
 2. Settings → Channels → Discord → Provision. Paste both. The wizard shows an
    invite URL — click it, pick your server, confirm. Click Apply.
 
-### Slack (longer, see caveat)
+### Slack (longer — read the runbook first)
 
-Slack's developer experience is famously rough for first-time installs. The
-practical flow for a **personal / standard workspace** today:
+Slack's first-app developer experience has more sharp edges than any other
+channel HyperAgent Zero supports. **Read [docs/channels/slack-setup.md](docs/channels/slack-setup.md)
+before starting** — it covers the exact steps that work, the three Slack
+design choices that bite you, and the troubleshooting for each error
+message you might hit.
 
-1. Generate the manifest JSON (Settings → Channels → Slack → Provision will
-   show it as a copy-block; or run `haz channel provision slack --show-manifest`
-   from the CLI in a future release).
-2. Open https://api.slack.com/apps → Create New App → From a manifest → paste
-   the JSON → Create.
-3. On the new app's page, sidebar → Install App → Install to Workspace → Allow.
-   Copy the **Bot User OAuth Token** (`xoxb-...`).
-4. Same app's page, Basic Information → App-Level Tokens → Generate Token and
-   Scopes → add scope `connections:write` → Generate. Copy the `xapp-...`.
-5. Paste both back into the wizard. Click Apply.
+TL;DR (verified live 2026-05-23 against a free-tier workspace):
 
-If your workspace is enrolled in Slack's **next-generation platform** (paid
-plans + developer-program enrollment) the wizard can drive `slack app install`
-via the Slack CLI for steps 2–3. Most workspaces aren't enrolled. See
-`specs/08-channel-provisioning-ux/spec.md` decision D10 for the gory details
-of why Slack non-distributable apps cannot be installed via API or OAuth v2.
+1. Generate the manifest JSON ([template in the runbook](docs/channels/slack-setup.md#the-manifest-json)).
+2. https://api.slack.com/apps → Create New App → From a manifest → paste → Create.
+3. Sidebar → Install App → Install to Workspace → Allow → copy `xoxb-`.
+4. Basic Information → App-Level Tokens → Generate (scope `connections:write`) → copy `xapp-`.
+5. Paste both back into the wizard → Apply.
+
+If your workspace is enrolled in Slack's "next-generation platform" (paid
+plans + developer-program enrollment) the Slack CLI can drive steps 2–3.
+Most workspaces aren't.
 
 For headless installs (no browser access), the same flows run from
 `haz channel provision <platform> --input k=v …`. Run
