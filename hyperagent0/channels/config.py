@@ -152,6 +152,131 @@ def _coerce_channel_dict(name: str, raw: Any) -> Optional[ChannelConfig]:
     )
 
 
+# ---------------------------------------------------------------------------
+# Multi-bot schema (spec 09 D1) — list-of-bots per platform
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class BotConfig:
+    """One bot instance under a platform (spec 09 D1).
+
+    Multiple BotConfigs can exist for the same platform; each represents
+    a distinct bot identity (different tokens, possibly different
+    default project).
+
+    ``bot_name`` is the local identifier the operator chose. It's
+    surfaced in logs and the Channels UI but is NOT the display name
+    Slack/Telegram/Discord shows users — that's set in the platform's
+    own app config.
+    """
+
+    channel_type: str  # "slack" / "telegram" / "discord"
+    bot_name: str       # operator-chosen local id
+    enabled: bool = False
+    token: str = ""
+    app_token: str = ""  # slack only; ignored by others
+    default_project: str = ""  # empty → _default project (spec 09 D2)
+    project_overrides: Dict[str, str] = field(default_factory=dict)
+    allowed_users: list[str] = field(default_factory=list)
+    allowed_chats: list[str] = field(default_factory=list)
+    require_mention: bool = False
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    def project_for_chat(self, chat_id: str) -> str:
+        """Resolve the project name for ``chat_id``.
+
+        Lookup order:
+          1. ``project_overrides[chat_id]`` (exact match)
+          2. ``default_project`` (or "_default" if empty)
+        """
+
+        override = self.project_overrides.get(str(chat_id))
+        if override:
+            return override
+        from hyperagent0.projects import resolve_project_name
+
+        return resolve_project_name(self.default_project)
+
+
+def _coerce_bot_dict(channel_type: str, raw: Any, *, fallback_name: str) -> Optional[BotConfig]:
+    """Coerce one bot entry. ``fallback_name`` used when ``raw`` has no name."""
+
+    if not isinstance(raw, dict):
+        return None
+    return BotConfig(
+        channel_type=channel_type,
+        bot_name=str(raw.get("name") or fallback_name),
+        enabled=bool(raw.get("enabled", False)),
+        token=str(raw.get("token", "") or ""),
+        app_token=str(raw.get("app_token", "") or ""),
+        default_project=str(raw.get("default_project", "") or ""),
+        project_overrides=dict(
+            raw.get("project_overrides", raw.get("project_binding", {})) or {}
+        ),
+        allowed_users=list(raw.get("allowed_users", []) or []),
+        allowed_chats=list(raw.get("allowed_chats", []) or []),
+        require_mention=bool(raw.get("require_mention", False)),
+        raw=raw,
+    )
+
+
+def load_bot_configs(
+    *,
+    channels_json: Optional[Path] = None,
+    settings_json: Optional[Path] = None,
+) -> Dict[str, list[BotConfig]]:
+    """Load the channel config map in spec-09 list-of-bots shape.
+
+    Backward-compat: if the file has dict-shape per platform (the
+    spec-04 / spec-08 schema), the loader auto-wraps it as a
+    single-element list under the bot name ``default``. The on-disk
+    file is left as-is (migration write happens on first save via the
+    spec-09 1.2 task, not here).
+
+    Existing callers using :func:`load_channels_config` continue to
+    work — that function returns the first bot per platform, which is
+    correct for single-bot installs (the common case until spec 09
+    P1.6 lands the lifecycle changes).
+    """
+
+    out: Dict[str, list[BotConfig]] = {}
+
+    def _ingest(channel_type: str, value: Any) -> None:
+        if isinstance(value, dict):
+            # Old single-bot shape: { "slack": { token: "...", ... } }.
+            bot = _coerce_bot_dict(channel_type, value, fallback_name="default")
+            if bot is not None:
+                out.setdefault(channel_type, []).append(bot)
+        elif isinstance(value, list):
+            # New multi-bot shape: { "slack": [ {name, token, ...}, ... ] }.
+            for i, raw in enumerate(value):
+                bot = _coerce_bot_dict(
+                    channel_type, raw, fallback_name=f"bot{i}"
+                )
+                if bot is not None:
+                    out.setdefault(channel_type, []).append(bot)
+
+    settings_path = settings_json or _upstream_settings_path()
+    settings_data = _read_json(settings_path) or {}
+    settings_channels = settings_data.get("channels")
+    if isinstance(settings_channels, dict):
+        for channel_type, value in settings_channels.items():
+            _ingest(channel_type, value)
+
+    cj_path = channels_json or channels_config_file()
+    cj_data = _read_json(cj_path) or {}
+    # ~/.hyperagent0/channels.json overrides: completely replace per-
+    # platform entries from settings.json (the layering matches
+    # load_channels_config).
+    for channel_type, value in cj_data.items():
+        if channel_type in out:
+            out[channel_type] = []
+        _ingest(channel_type, value)
+
+    return out
+
+
 def _read_json(path: Path) -> Optional[dict]:
     try:
         with path.open("r", encoding="utf-8") as fp:
