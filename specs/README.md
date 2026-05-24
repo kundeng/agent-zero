@@ -14,6 +14,9 @@ Fork of [agent0ai/agent-zero](https://github.com/agent0ai/agent-zero), re-shaped
 | 06 | [Channel Hardening](06-channel-hardening/spec.md) | DRAFT | channels | 04-chat-channels |
 | 07 | [Install UX — User Journeys](07-install-ux/spec.md) | DRAFT | devops | 01-host-first, 03-daemon-cli |
 | 08 | [Channel Provisioning UX](08-channel-provisioning-ux/spec.md) | DRAFT | channels | 04-chat-channels, 06-channel-hardening |
+| 09 | [Bot + Project Entity Model](09-bot-project-model/spec.md) | DRAFT | channels | 04, 06, 08 |
+| 10 | [Project-Scoped Capabilities](10-project-scoped-capabilities/spec.md) | DRAFT | projects | 09 |
+| 11 | [Tool Permissions + Claude Code Parity](11-tool-permissions/spec.md) | DRAFT | tools | 09, 10 |
 
 ## What Agent Zero Already Has (no spec needed)
 
@@ -39,3 +42,4 @@ P1 second pass: 03 + 05 (daemon lifecycle + project sandboxing)
 P2 third pass: 04 + 06 (chat channels + hardening)
 P3 fourth pass: 07 (install UX, captures the user-journey decisions)
 P4 fifth pass: 08 (channel provisioning UX — Settings tab + thin CLI)
+P5 sixth pass: 09 + 10 + 11 (bot/project model unification, per-project capabilities, tool permissions + Claude Code parity)
