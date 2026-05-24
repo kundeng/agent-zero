@@ -469,9 +469,13 @@ class ChannelRouter(ChannelSetup):
                 return None
             await asyncio.sleep(0.25)
 
-        result = None
+        # DeferredTask.result() is async — await it (was being discarded
+        # as a coroutine and producing a RuntimeWarning; the agent's reply
+        # was never picked up).
+        result: Any = None
         try:
-            result = task.result() if task is not None else None  # type: ignore[union-attr]
+            if task is not None:
+                result = await task.result()
         except Exception:
             result = None
         if isinstance(result, str) and result.strip():
