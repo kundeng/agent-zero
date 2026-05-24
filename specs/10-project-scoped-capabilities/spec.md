@@ -96,31 +96,45 @@ universally needed; the project-specific list is for the project's
 own resources. Asking every project to redeclare `api.anthropic.com`
 would be annoying.
 
-### D3: Skills filtered to active project + global fallback
+### D3: Skills are ALREADY project-scoped — confirm and document
 
-**Choice**: Fix the bug in `python/helpers/skills.py:list_skills()`.
-Replace the wildcard `usr/projects/*/.a0proj/skills` with explicit
-project resolution:
+**Re-read of `python/helpers/skills.py` after the spec draft**: the
+agent-execution path is already correct. `list_skills(agent=agent)`
+→ `get_skill_roots(agent)` → `subagents.get_paths(agent, "skills")`,
+which resolves project → agent-profile → user → default in priority
+order. The system prompt extension calls `list_skills(agent=agent)`
+at `_10_system_prompt.py:88` so the agent only ever sees its active
+project's skills + globals.
 
-```python
-def list_skills(agent):
-    project = projects.get_context_project_name(agent.context) or "_default"
-    paths = [
-        f"usr/projects/{project}/.a0proj/agents/{agent_profile}/skills",
-        f"usr/projects/{project}/.a0proj/skills",
-        f"usr/agents/{agent_profile}/skills",
-        f"agents/{agent_profile}/skills",
-        "usr/skills",      # NEW: global user skills
-        "skills",          # NEW: builtin global skills
-    ]
-    return _load_from_paths(paths)
-```
+The wildcard `usr/projects/*/.a0proj/skills` only kicks in when
+`list_skills(agent=None)` is called — and that path is only used by:
 
-**Why**: the user explicitly stated skills are per-project (rationale:
-a skill named "deploy" means different things in different projects).
-Global skills (`usr/skills/` and `skills/`) still exist as a shared
-library for genuinely-cross-project things (e.g. a "search the web"
-skill).
+- `python/api/skills.py` — the Web UI's global skill browser
+- `python/helpers/skills_cli.py` — CLI listing for the operator
+
+Both are admin surfaces. They should show all skills across all
+projects (so the operator knows what exists in the system). The
+wildcard is intentional, not a bug.
+
+**Choice**: no code change. Document that `get_skill_roots(agent=None)`
+is for admin views and `get_skill_roots(agent=Agent)` is what the
+agent uses.
+
+**Why I initially called this a bug**: misread the call site for the
+system prompt. The spec draft was wrong; this revision corrects it.
+Live in the Log.
+
+### D3a: `_default` project bridging for unagent'd skill resolution
+
+**Choice (small)**: When `subagents.get_paths(agent, "skills")` falls
+back to globals because no project is active, prepend
+`usr/projects/_default/.a0proj/skills` once spec 09 lands its
+`_default` project entity. This makes "projectless = use _default"
+hold for skills too, in addition to other capabilities. ~5 lines.
+
+**Why**: consistency with spec 09 D2. Every per-project capability
+resolves through the same code path whether the project is named or
+`_default`.
 
 ### D4: Knowledge subdir consistency
 
@@ -156,7 +170,7 @@ pattern. Richer per-tool toggles can come in P2.
 - [ ] 1.3 `hyperagent0/sandbox/srt.py:_ensure_profile` reads project
   `network.allow` + global `sandbox_network_default`, writes union
   into the per-project srt profile.
-- [ ] 1.4 `python/helpers/skills.py:list_skills` rewrite per D3.
+- [ ] 1.4 `subagents.get_paths()` prepends `usr/projects/_default/.a0proj/skills` when no project active and `_default` exists, per D3a. (No rewrite of `list_skills` needed — original D3 was based on a misread.)
 - [ ] 1.5 Knowledge wiring verification (read code, add test if missing).
 - [ ] 1.6 Settings field `sandbox_network_default` in `python/helpers/settings.py`.
 - [ ] 1.7 Project schema migration: existing `project.json` files
@@ -200,7 +214,13 @@ pattern. Richer per-tool toggles can come in P2.
 **2026-05-24** — Drafted in same conversation as spec 09. User
 explicitly answered "yes scope skills to projects" and "MCP per
 project too". Network allowlist was on spec 01 D8 backlog from
-launch — this spec finally lands it. The skills-leak bug-fix from
-the user's #2 question is a P1 task here (not a one-off fix) because
-it should be done together with the per-project skills/MCP changes
-that share the same project-resolution helper.
+launch — this spec finally lands it.
+
+**2026-05-24 (correction)** — Initial D3 claimed skills leaked
+across projects via a wildcard bug. Re-reading the code showed the
+agent-execution path already routes through
+`subagents.get_paths(agent, "skills")` which is project-scoped. The
+wildcard is only used by admin/management surfaces (Web UI skill
+browser, CLI lister) which arguably should see all skills. D3
+revised to document this; new D3a covers the `_default`-project
+bridging once spec 09 lands. No skills code fix needed.
