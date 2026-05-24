@@ -43,8 +43,8 @@ class TelegramChannel(BaseChannel):
 
     channel_type = "telegram"
 
-    def __init__(self, config: dict[str, Any]) -> None:
-        super().__init__(config)
+    def __init__(self, config: dict[str, Any], *, bot_name: str = "_legacy") -> None:
+        super().__init__(config, bot_name=bot_name)
         # All SDK objects stay None until ``connect()`` resolves them.
         self._application: Any = None
         self._bot: Any = None
@@ -146,6 +146,7 @@ class TelegramChannel(BaseChannel):
                 },
                 is_mention=_detect_is_mention(message),
                 is_group=is_group,
+                bot_name=self.bot_name,
             )
             await adapter._dispatch_inbound(inbound)
 

@@ -136,11 +136,13 @@ def _adapter_module(name: str) -> Optional[str]:
     }.get(name)
 
 
-def _instantiate_adapter(name: str, cfg) -> Any:
+def _instantiate_adapter(name: str, cfg, *, bot_name: str = "_legacy") -> Any:
     """Import the adapter module and construct the adapter instance.
 
     Importing the module triggers ``register_channel(...)``, populating
-    the registry in :mod:`hyperagent0.channels.base`.
+    the registry in :mod:`hyperagent0.channels.base`. ``bot_name``
+    propagates the spec-09 D5 bot identity into the adapter so
+    InboundMessages stamp the right routing key.
     """
 
     import importlib
@@ -157,7 +159,8 @@ def _instantiate_adapter(name: str, cfg) -> Any:
         raise RuntimeError(
             f"channel adapter module {mod_path!r} did not register class {name!r}"
         )
-    return cls(cfg.raw if hasattr(cfg, "raw") else cfg)
+    raw = cfg.raw if hasattr(cfg, "raw") else cfg
+    return cls(raw, bot_name=bot_name)
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +169,12 @@ def _instantiate_adapter(name: str, cfg) -> Any:
 
 
 def start_enabled_channels() -> None:
-    """Boot every channel whose config has ``enabled: true``.
+    """Boot every bot whose config has ``enabled: true``.
+
+    Spec 09 D5: a platform's value in ``channels.json`` is a list of
+    bot configs. We instantiate one adapter per enabled bot, register
+    each under ``(channel_type, bot_name)``, and treat the
+    process-global ``_channels`` map the same way.
 
     Called by :mod:`hyperagent0.cli_commands.start` after the upstream
     server is up. Safe to call more than once — re-entry is a no-op.
@@ -178,16 +186,30 @@ def start_enabled_channels() -> None:
         if _started:
             return
         try:
-            from .config import load_channels_config
+            from .config import load_bot_configs
             from .router import ChannelRouter
         except Exception:
             logger.exception("could not import channels stack")
             return
 
-        configs = load_channels_config()
-        enabled = {n: c for n, c in configs.items() if c.enabled}
-        if not enabled:
-            logger.info("no channels enabled; channels subsystem idle")
+        try:
+            from hyperagent0.projects import ensure_default_project
+
+            ensure_default_project()
+        except Exception:
+            # Project bootstrap failure must not block channels from coming up
+            # — log and proceed; per-chat project activation falls back to
+            # whatever upstream's resolve_project_name yields.
+            logger.exception("ensure_default_project failed (non-fatal)")
+
+        bots_by_platform = load_bot_configs()
+        enabled_bots: list = []  # flat [(channel_type, BotConfig), ...]
+        for channel_type, bots in bots_by_platform.items():
+            for bot in bots:
+                if bot.enabled:
+                    enabled_bots.append((channel_type, bot))
+        if not enabled_bots:
+            logger.info("no bots enabled; channels subsystem idle")
             _started = True
             return
 
@@ -225,24 +247,27 @@ def start_enabled_channels() -> None:
             logger.error("channels loop failed to initialize")
             return
 
-        _router = ChannelRouter(channel_configs=enabled)
+        _router = ChannelRouter()
 
-        # Connect each enabled adapter on the channels loop.
-        for name, cfg in enabled.items():
+        # Connect each enabled bot's adapter on the channels loop.
+        for channel_type, bot in enabled_bots:
+            label = f"{channel_type}/{bot.bot_name}"
             try:
-                adapter = _instantiate_adapter(name, cfg)
+                adapter = _instantiate_adapter(
+                    channel_type, bot, bot_name=bot.bot_name
+                )
             except Exception:
                 logger.exception(
-                    "could not instantiate channel adapter %s; skipping", name
+                    "could not instantiate channel adapter %s; skipping", label
                 )
                 continue
-            _router.register(adapter, cfg)
-            _channels[name] = adapter
-            if not _connect_with_retry(adapter, name):
+            _router.register(adapter, bot)
+            _channels[(channel_type, bot.bot_name)] = adapter
+            if not _connect_with_retry(adapter, label):
                 # Already logged inside the helper. Leave adapter offline;
-                # the daemon keeps running so other channels can come up.
+                # the daemon keeps running so other bots can come up.
                 continue
-            logger.info("channel %s started", name)
+            logger.info("channel %s started", label)
 
         _started = True
 
@@ -265,13 +290,14 @@ def stop_all_channels(timeout: float = 10.0) -> None:
             return
 
         # Schedule disconnects on the channels loop and wait for each.
-        for name, adapter in list(_channels.items()):
+        for key, adapter in list(_channels.items()):
+            label = f"{key[0]}/{key[1]}" if isinstance(key, tuple) else str(key)
             try:
                 fut = asyncio.run_coroutine_threadsafe(adapter.disconnect(), _loop)
                 fut.result(timeout=timeout)
-                logger.info("channel %s stopped", name)
+                logger.info("channel %s stopped", label)
             except Exception:
-                logger.exception("channel %s disconnect failed", name)
+                logger.exception("channel %s disconnect failed", label)
 
         # Stop the loop.
         try:
@@ -303,21 +329,28 @@ def get_router() -> Any:
 def running_adapters() -> dict[str, dict[str, Any]]:
     """Snapshot live-adapter state for the status API (spec 08 1.7).
 
-    Returns a mapping of ``channel_type`` -> ``{"live": bool}``. Future
-    expansion ground: ``last_error`` once adapters surface a
-    last-failure timestamp, ``connected_at`` once we record it. Kept
-    flat and JSON-serializable so :mod:`python.api.channels_status`
-    can pass the dict straight through.
+    Returns a mapping of ``"channel_type"`` or ``"channel_type/bot_name"``
+    → ``{"live": bool}``. Spec 09 added the bot-name suffix for
+    multi-bot installs; single-bot (``_legacy``) entries keep the bare
+    ``channel_type`` key so existing status consumers don't break.
+
+    Future expansion ground: ``last_error`` once adapters surface a
+    last-failure timestamp, ``connected_at`` once we record it.
     """
 
     with _lock:
-        # An adapter is in ``_channels`` if it was instantiated; the
-        # connect-with-retry path may have left it offline if every
-        # retry exhausted. Today we only have a binary live/not-live
-        # signal — refine when adapters expose a richer state.
         snapshot: dict[str, dict[str, Any]] = {}
-        for name, adapter in _channels.items():
-            snapshot[name] = {
+        for key, adapter in _channels.items():
+            if isinstance(key, tuple):
+                channel_type, bot_name = key
+                label = (
+                    channel_type
+                    if bot_name == "_legacy"
+                    else f"{channel_type}/{bot_name}"
+                )
+            else:
+                label = str(key)
+            snapshot[label] = {
                 "live": adapter is not None,
             }
         return snapshot

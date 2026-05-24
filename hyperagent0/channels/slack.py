@@ -52,8 +52,8 @@ class SlackChannel(BaseChannel):
 
     channel_type = "slack"
 
-    def __init__(self, config: dict[str, Any]) -> None:
-        super().__init__(config)
+    def __init__(self, config: dict[str, Any], *, bot_name: str = "_legacy") -> None:
+        super().__init__(config, bot_name=bot_name)
         self._app: Any = None
         self._handler: Any = None
         self._client: Any = None
@@ -171,6 +171,7 @@ class SlackChannel(BaseChannel):
                 },
                 is_mention=is_mention,
                 is_group=is_group,
+                bot_name=self.bot_name,
             )
 
         def _event_envelope_id(event: dict, body: Optional[dict]) -> Optional[str]:

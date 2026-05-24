@@ -30,8 +30,8 @@ class DiscordChannel(BaseChannel):
 
     channel_type = "discord"
 
-    def __init__(self, config: dict[str, Any]) -> None:
-        super().__init__(config)
+    def __init__(self, config: dict[str, Any], *, bot_name: str = "_legacy") -> None:
+        super().__init__(config, bot_name=bot_name)
         self._client: Any = None
         self._task: Optional[asyncio.Task] = None
         self._stopped = False
@@ -107,6 +107,7 @@ class DiscordChannel(BaseChannel):
                 },
                 is_mention=is_mention,
                 is_group=is_group,
+                bot_name=self.bot_name,
             )
             await adapter._dispatch_inbound(inbound)
 

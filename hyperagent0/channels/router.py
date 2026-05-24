@@ -55,12 +55,25 @@ def default_db_path() -> Path:
     return Path(os.path.expanduser("~/.hyperagent0/channels.db"))
 
 
+#: Default bot_name used when callers haven't migrated to multi-bot
+#: keying yet. Matches the DEFAULT clause in migration 002 so existing
+#: rows and new rows from single-bot callers share the same key.
+LEGACY_BOT_NAME = "_legacy"
+
+
 class ThreadStore:
-    """SQLite wrapper for the (channel, chat) → context mapping.
+    """SQLite wrapper for the (channel_type, bot_name, chat_id) → context mapping.
 
     Spec 06: schema management moved into :class:`Migrator` (numbered
     .sql files in ``migrations/``). Construction applies any pending
     migrations idempotently.
+
+    Spec 09 (D3 / migration 002): composite key extended with
+    ``bot_name`` so two bots on the same platform can DM the same chat
+    id without collision. ``bot_name`` defaults to
+    :data:`LEGACY_BOT_NAME` for callers that predate the multi-bot
+    wiring — the default value matches the column default in the
+    migration so legacy rows and new single-bot-shape inserts coexist.
     """
 
     def __init__(self, db_path: Optional[Path] = None) -> None:
@@ -71,21 +84,29 @@ class ThreadStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         Migrator(self._conn, lock=self._lock).upgrade()
 
-    def get(self, channel_type: str, chat_id: str) -> Optional[Dict[str, Any]]:
+    def get(
+        self,
+        channel_type: str,
+        chat_id: str,
+        *,
+        bot_name: str = LEGACY_BOT_NAME,
+    ) -> Optional[Dict[str, Any]]:
         with self._lock:
             row = self._conn.execute(
-                "SELECT channel_type, chat_id, context_id, project_name, last_active "
-                "FROM thread_map WHERE channel_type = ? AND chat_id = ?",
-                (channel_type, chat_id),
+                "SELECT channel_type, bot_name, chat_id, context_id, project_name, last_active "
+                "FROM thread_map "
+                "WHERE channel_type = ? AND bot_name = ? AND chat_id = ?",
+                (channel_type, bot_name, chat_id),
             ).fetchone()
         if row is None:
             return None
         return {
             "channel_type": row[0],
-            "chat_id": row[1],
-            "context_id": row[2],
-            "project_name": row[3],
-            "last_active": row[4],
+            "bot_name": row[1],
+            "chat_id": row[2],
+            "context_id": row[3],
+            "project_name": row[4],
+            "last_active": row[5],
         }
 
     def upsert(
@@ -94,46 +115,55 @@ class ThreadStore:
         chat_id: str,
         context_id: str,
         project_name: Optional[str] = None,
+        *,
+        bot_name: str = LEGACY_BOT_NAME,
     ) -> None:
         now = time.time()
         with self._lock:
             self._conn.execute(
                 """
-                INSERT INTO thread_map(channel_type, chat_id, context_id, project_name, last_active)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(channel_type, chat_id) DO UPDATE SET
+                INSERT INTO thread_map(channel_type, bot_name, chat_id, context_id, project_name, last_active)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(channel_type, bot_name, chat_id) DO UPDATE SET
                     context_id   = excluded.context_id,
                     project_name = excluded.project_name,
                     last_active  = excluded.last_active
                 """,
-                (channel_type, chat_id, context_id, project_name, now),
+                (channel_type, bot_name, chat_id, context_id, project_name, now),
             )
             self._conn.commit()
 
-    def touch(self, channel_type: str, chat_id: str) -> None:
+    def touch(
+        self,
+        channel_type: str,
+        chat_id: str,
+        *,
+        bot_name: str = LEGACY_BOT_NAME,
+    ) -> None:
         now = time.time()
         with self._lock:
             self._conn.execute(
                 "UPDATE thread_map SET last_active = ? "
-                "WHERE channel_type = ? AND chat_id = ?",
-                (now, channel_type, chat_id),
+                "WHERE channel_type = ? AND bot_name = ? AND chat_id = ?",
+                (now, channel_type, bot_name, chat_id),
             )
             self._conn.commit()
 
     def all_rows(self) -> list[dict[str, Any]]:
         with self._lock:
             cur = self._conn.execute(
-                "SELECT channel_type, chat_id, context_id, project_name, last_active "
+                "SELECT channel_type, bot_name, chat_id, context_id, project_name, last_active "
                 "FROM thread_map ORDER BY last_active DESC"
             )
             rows = cur.fetchall()
         return [
             {
                 "channel_type": r[0],
-                "chat_id": r[1],
-                "context_id": r[2],
-                "project_name": r[3],
-                "last_active": r[4],
+                "bot_name": r[1],
+                "chat_id": r[2],
+                "context_id": r[3],
+                "project_name": r[4],
+                "last_active": r[5],
             }
             for r in rows
         ]
@@ -173,13 +203,21 @@ class ChannelRouter(ChannelSetup):
 
     def __init__(
         self,
-        channels: Optional[Dict[str, BaseChannel]] = None,
-        channel_configs: Optional[Dict[str, ChannelConfig]] = None,
+        channels: Optional[Dict[Any, BaseChannel]] = None,
+        channel_configs: Optional[Dict[Any, ChannelConfig]] = None,
         store: Optional[ThreadStore] = None,
         reply_factory: Optional[ReplyFactory] = None,
     ) -> None:
-        self.channels: Dict[str, BaseChannel] = dict(channels or {})
-        self.channel_configs: Dict[str, ChannelConfig] = dict(channel_configs or {})
+        # Spec 09 D5: channel adapters and per-channel configs are
+        # indexed by ``(channel_type, bot_name)``. Legacy callers
+        # passing a plain ``str`` key are wrapped as
+        # ``(key, "_legacy")``.
+        self.channels: Dict[tuple[str, str], BaseChannel] = {
+            _normalize_channel_key(k): v for k, v in (channels or {}).items()
+        }
+        self.channel_configs: Dict[tuple[str, str], ChannelConfig] = {
+            _normalize_channel_key(k): v for k, v in (channel_configs or {}).items()
+        }
         self.store = store or ThreadStore()
         # ``reply_factory`` is the test seam — see module docstring.
         self.reply_factory = reply_factory
@@ -196,11 +234,16 @@ class ChannelRouter(ChannelSetup):
         Wires both the spec-06 :class:`ChannelSetup` path (preferred)
         and the spec-04 ``on_message`` callback (legacy) so adapters
         that haven't migrated still get inbound dispatch.
+
+        Spec 09 D5: the adapter is registered under the
+        ``(channel_type, bot_name)`` tuple so multiple bots on the
+        same platform get separate slots.
         """
 
-        self.channels[channel.channel_type] = channel
+        key = (channel.channel_type, channel.bot_name)
+        self.channels[key] = channel
         if config is not None:
-            self.channel_configs[channel.channel_type] = config
+            self.channel_configs[key] = config
         channel.setup(self)
         channel.on_message = self.handle_inbound  # legacy path
 
@@ -230,12 +273,13 @@ class ChannelRouter(ChannelSetup):
     ) -> None:
         # Best-effort: refresh last_active so the chat doesn't look stale.
         # Channel-name persistence can be added in a future migration.
-        # We don't know the channel_type here without context; the
-        # touch is a no-op when no row exists.
+        # We don't know the channel_type/bot_name here without context;
+        # the touch is a no-op when no row exists, so we fan out over
+        # every (channel_type, bot_name) pair we know.
         if not platform_id:
             return
-        for ct in list(self.channels.keys()):
-            self.store.touch(ct, platform_id)
+        for ct, bot_name in list(self.channels.keys()):
+            self.store.touch(ct, platform_id, bot_name=bot_name)
 
     async def on_action(
         self,
@@ -320,19 +364,22 @@ class ChannelRouter(ChannelSetup):
         *,
         reply_to: Optional[DeliveryAddress],
     ) -> None:
-        cfg = self.channel_configs.get(msg.channel_type)
+        key = (msg.channel_type, msg.bot_name)
+        cfg = self.channel_configs.get(key)
         if cfg is not None:
             if not cfg.is_user_allowed(msg.user_id):
                 logger.info(
-                    "channel %s rejected user %s (not in allow-list)",
+                    "channel %s/%s rejected user %s (not in allow-list)",
                     msg.channel_type,
+                    msg.bot_name,
                     msg.user_id,
                 )
                 return
             if not cfg.is_chat_allowed(msg.chat_id):
                 logger.info(
-                    "channel %s rejected chat %s (not in allow-list)",
+                    "channel %s/%s rejected chat %s (not in allow-list)",
                     msg.channel_type,
+                    msg.bot_name,
                     msg.chat_id,
                 )
                 return
@@ -344,39 +391,47 @@ class ChannelRouter(ChannelSetup):
                 and not msg.is_mention
             ):
                 logger.debug(
-                    "channel %s chat %s: group msg without mention; ignored",
+                    "channel %s/%s chat %s: group msg without mention; ignored",
                     msg.channel_type,
+                    msg.bot_name,
                     msg.chat_id,
                 )
                 return
 
-        existing = self.store.get(msg.channel_type, msg.chat_id)
+        existing = self.store.get(msg.channel_type, msg.chat_id, bot_name=msg.bot_name)
         context_id_hint = existing["context_id"] if existing else None
 
         # If a test reply factory is set, take that path and skip the
         # AgentContext machinery entirely.
         if self.reply_factory is not None:
-            try:
-                reply = await _maybe_await(
-                    self.reply_factory(msg, self.channels[msg.channel_type], context_id_hint)
-                )
-            except KeyError:
+            adapter = self.channels.get(key)
+            if adapter is None:
                 logger.error(
-                    "no adapter registered for channel %s", msg.channel_type
+                    "no adapter registered for %s/%s",
+                    msg.channel_type,
+                    msg.bot_name,
                 )
                 return
+            reply = await _maybe_await(
+                self.reply_factory(msg, adapter, context_id_hint)
+            )
             if reply:
                 await self._send_reply(msg, str(reply), reply_to=reply_to)
             self.store.upsert(
-                msg.channel_type, msg.chat_id, context_id_hint or "test", None
+                msg.channel_type,
+                msg.chat_id,
+                context_id_hint or "test",
+                None,
+                bot_name=msg.bot_name,
             )
             return
 
         context, project_name = self._get_or_create_context(msg, cfg, existing)
         if context is None:
             logger.error(
-                "could not obtain AgentContext for %s/%s",
+                "could not obtain AgentContext for %s/%s/%s",
                 msg.channel_type,
+                msg.bot_name,
                 msg.chat_id,
             )
             return
@@ -384,7 +439,11 @@ class ChannelRouter(ChannelSetup):
         # Persist the (possibly new) mapping before dispatch so a crash
         # mid-monologue still leaves the chat resumable.
         self.store.upsert(
-            msg.channel_type, msg.chat_id, context.id, project_name
+            msg.channel_type,
+            msg.chat_id,
+            context.id,
+            project_name,
+            bot_name=msg.bot_name,
         )
 
         reply_text = await self._dispatch_to_context(context, msg)
@@ -511,10 +570,17 @@ class ChannelRouter(ChannelSetup):
         Spec 06 D1: if ``reply_to`` is provided (admin-transport path),
         deliver to that address — possibly a different channel — and
         skip the original inbound's metadata-based reply-threading.
+
+        Spec 09 D5: adapter lookup uses ``(channel_type, bot_name)``.
+        For an inbound reply, ``bot_name`` comes from the inbound;
+        for a ``reply_to`` redirect, we pick the first adapter
+        registered under the target channel_type (any bot of that
+        platform can deliver the message — the redirect target is
+        operator intent, not bot-specific).
         """
 
         if reply_to is not None:
-            target_channel = self.channels.get(reply_to.channel_type)
+            target_channel = self._pick_adapter_for_channel_type(reply_to.channel_type)
             if target_channel is None:
                 logger.error(
                     "reply_to channel %s has no adapter; falling back to inbound",
@@ -528,6 +594,7 @@ class ChannelRouter(ChannelSetup):
                     metadata={
                         "formatted": format_for_channel(text, reply_to.channel_type)
                     },
+                    bot_name=target_channel.bot_name,
                 )
                 try:
                     await target_channel.send(outbound)
@@ -539,10 +606,12 @@ class ChannelRouter(ChannelSetup):
                         reply_to.platform_id,
                     )
 
-        channel = self.channels.get(inbound.channel_type)
+        channel = self.channels.get((inbound.channel_type, inbound.bot_name))
         if channel is None:
             logger.error(
-                "no adapter for channel %s; dropping reply", inbound.channel_type
+                "no adapter for channel %s/%s; dropping reply",
+                inbound.channel_type,
+                inbound.bot_name,
             )
             return
         outbound = OutboundMessage(
@@ -550,15 +619,34 @@ class ChannelRouter(ChannelSetup):
             text=text,
             reply_to=inbound.metadata.get("message_id"),
             metadata={"formatted": format_for_channel(text, inbound.channel_type)},
+            bot_name=inbound.bot_name,
         )
         try:
             await channel.send(outbound)
         except Exception:
             logger.exception(
-                "send() failed for channel %s chat %s",
+                "send() failed for channel %s/%s chat %s",
                 inbound.channel_type,
+                inbound.bot_name,
                 inbound.chat_id,
             )
+
+    def _pick_adapter_for_channel_type(
+        self, channel_type: str
+    ) -> Optional[BaseChannel]:
+        """Return any adapter registered for ``channel_type``.
+
+        Used by the ``reply_to`` redirect path where the operator names
+        a channel but not a specific bot — we deliver via whichever
+        bot is available. Iteration order is insertion order (dict
+        guarantee since Python 3.7), which is the order the lifecycle
+        loaded bots in.
+        """
+
+        for (ct, _bot_name), adapter in self.channels.items():
+            if ct == channel_type:
+                return adapter
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -572,3 +660,23 @@ async def _maybe_await(value: Any) -> Any:
     if asyncio.iscoroutine(value) or asyncio.isfuture(value):
         return await value
     return value
+
+
+def _normalize_channel_key(key: Any) -> tuple[str, str]:
+    """Coerce a legacy ``str`` key to ``(channel_type, "_legacy")``.
+
+    Spec 09 D5 keys the router's adapter / config dicts by
+    ``(channel_type, bot_name)``. Callers that predate the multi-bot
+    wiring pass plain strings; we wrap them under the ``"_legacy"``
+    bot identity so they keep working unchanged.
+    """
+
+    if isinstance(key, tuple):
+        if len(key) != 2:
+            raise ValueError(
+                f"channel key must be (channel_type, bot_name); got {key!r}"
+            )
+        return (str(key[0]), str(key[1]))
+    if isinstance(key, str):
+        return (key, "_legacy")
+    raise TypeError(f"channel key must be str or 2-tuple; got {type(key).__name__}")

@@ -71,6 +71,12 @@ class InboundMessage:
     is_mention: bool = False
     is_group: bool = False
     kind: Literal["chat", "chat-sdk"] = "chat"
+    # ---- spec 09 D5 addition ----
+    #: Name of the bot identity that received this message. Adapters set
+    #: this from their own ``self.bot_name``. Defaults to ``"_legacy"``
+    #: so InboundMessages constructed by single-bot callers still route
+    #: through the migration-002 ``_legacy`` row family.
+    bot_name: str = "_legacy"
 
 
 @dataclass
@@ -80,12 +86,17 @@ class OutboundMessage:
     Adapters consume ``text`` (markdown by convention) and call into
     :mod:`hyperagent0.channels.formatter` to translate to whatever
     markup the platform expects.
+
+    Spec 09 D5: ``bot_name`` lets the router pick the right adapter
+    when multiple bots are registered for the same ``channel_type``.
+    Defaults to ``"_legacy"`` so single-bot installs work unchanged.
     """
 
     chat_id: str
     text: str
     reply_to: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    bot_name: str = "_legacy"
 
 
 @dataclass
@@ -203,12 +214,22 @@ class BaseChannel(abc.ABC):
     #: Subclasses override this with their registry key.
     channel_type: str = ""
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any],
+        *,
+        bot_name: str = "_legacy",
+    ) -> None:
         # ``config`` is the per-channel dict produced by
         # :mod:`hyperagent0.channels.config`. Secrets inside it may
         # still be in their ``$$secret(KEY)`` placeholder form; adapters
         # resolve them lazily inside :meth:`connect`.
         self.config = config
+        #: Spec 09 D5: each adapter instance belongs to exactly one bot.
+        #: ``bot_name`` defaults to ``"_legacy"`` for callers that predate
+        #: the multi-bot lifecycle wiring — matches the migration-002
+        #: column default so single-bot installs keep working unchanged.
+        self.bot_name = bot_name
         self._channel_setup: Optional[ChannelSetup] = None
         # Legacy spec-04 callback (still supported via the on_message shim).
         self._on_message: Optional[OnMessageCallback] = None
