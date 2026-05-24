@@ -225,19 +225,23 @@ def load_bot_configs(
     *,
     channels_json: Optional[Path] = None,
     settings_json: Optional[Path] = None,
+    persist_migration: bool = True,
 ) -> Dict[str, list[BotConfig]]:
     """Load the channel config map in spec-09 list-of-bots shape.
 
-    Backward-compat: if the file has dict-shape per platform (the
-    spec-04 / spec-08 schema), the loader auto-wraps it as a
-    single-element list under the bot name ``default``. The on-disk
-    file is left as-is (migration write happens on first save via the
-    spec-09 1.2 task, not here).
+    Backward-compat: if ``~/.hyperagent0/channels.json`` is in
+    dict-shape per platform (the spec-04 / spec-08 schema), the loader
+    auto-wraps each entry as a single-element list under bot name
+    ``default``. When ``persist_migration`` is True (the default), the
+    normalized list-shape is also written back to disk so subsequent
+    loads, hand-edits, and provisioning UX all see the new schema.
+    Settings.json is never modified — that's the upstream read-only
+    layer.
 
     Existing callers using :func:`load_channels_config` continue to
     work — that function returns the first bot per platform, which is
-    correct for single-bot installs (the common case until spec 09
-    P1.6 lands the lifecycle changes).
+    correct for single-bot installs until lifecycle migrates to
+    :func:`load_bot_configs` directly.
     """
 
     out: Dict[str, list[BotConfig]] = {}
@@ -274,7 +278,52 @@ def load_bot_configs(
             out[channel_type] = []
         _ingest(channel_type, value)
 
+    if persist_migration and cj_data:
+        _maybe_persist_normalized(cj_path, cj_data)
+
     return out
+
+
+def _maybe_persist_normalized(cj_path: Path, cj_data: dict) -> None:
+    """If ``cj_data`` has any dict-shape entry, write the normalized
+    list-shape back to ``cj_path``.
+
+    Idempotent: a file already in list-shape is left untouched (the
+    same bytes would be written, but we avoid the disk write so file
+    mtime stays stable for tools that watch it).
+
+    Atomic-ish: writes to a tempfile sibling and renames into place,
+    so a crash mid-write doesn't leave a half-written channels.json.
+    Other failure modes (filesystem unwritable, permission denied) are
+    swallowed with a log entry — config load must succeed even when
+    we can't persist the migration.
+    """
+
+    needs_migration = any(isinstance(v, dict) for v in cj_data.values())
+    if not needs_migration:
+        return
+
+    normalized: dict[str, list[dict]] = {}
+    for channel_type, value in cj_data.items():
+        if isinstance(value, dict):
+            entry = dict(value)
+            entry.setdefault("name", "default")
+            normalized[channel_type] = [entry]
+        elif isinstance(value, list):
+            normalized[channel_type] = [dict(v) for v in value if isinstance(v, dict)]
+        # Anything else: drop. Garbage in the file shouldn't be preserved.
+
+    try:
+        cj_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cj_path.with_suffix(cj_path.suffix + ".tmp")
+        tmp.write_text(json.dumps(normalized, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, cj_path)
+    except Exception:
+        import logging as _logging
+
+        _logging.getLogger(__name__).exception(
+            "could not persist normalized channels.json to %s", cj_path
+        )
 
 
 def _read_json(path: Path) -> Optional[dict]:

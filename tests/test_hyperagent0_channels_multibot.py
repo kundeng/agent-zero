@@ -116,3 +116,86 @@ def test_project_overrides_accepts_old_project_binding_key(tmp_path):
     })
     bots = load_bot_configs(channels_json=cj, settings_json=Path("/nonexistent"))
     assert bots["slack"][0].project_overrides == {"C111": "alpha"}
+
+
+# ---------------------------------------------------------------------------
+# Write-back migration (spec 09 task 1.2)
+# ---------------------------------------------------------------------------
+
+
+def test_load_persists_normalized_shape_back_to_channels_json(tmp_path):
+    """Loading an old dict-shape channels.json must persist the
+    normalized list-shape back to disk so subsequent edits see the new
+    schema."""
+
+    cj = _write_channels(tmp_path, {
+        "slack": {"enabled": True, "token": "xoxb-x", "app_token": "xapp-y"},
+        "telegram": {"enabled": False, "token": "tg-1"},
+    })
+
+    # Pre-condition: dict shape on disk.
+    on_disk_before = json.loads(cj.read_text())
+    assert isinstance(on_disk_before["slack"], dict)
+
+    load_bot_configs(channels_json=cj, settings_json=Path("/nonexistent"))
+
+    # Post-condition: list shape on disk.
+    on_disk_after = json.loads(cj.read_text())
+    assert isinstance(on_disk_after["slack"], list)
+    assert isinstance(on_disk_after["telegram"], list)
+    assert on_disk_after["slack"][0]["name"] == "default"
+    assert on_disk_after["slack"][0]["token"] == "xoxb-x"
+    assert on_disk_after["slack"][0]["app_token"] == "xapp-y"
+    assert on_disk_after["telegram"][0]["enabled"] is False
+
+
+def test_load_skips_persist_when_already_list_shape(tmp_path):
+    """A file already in list-shape must not be rewritten (mtime stable)."""
+
+    import time as _t
+
+    cj = _write_channels(tmp_path, {
+        "slack": [
+            {"name": "hazbot", "enabled": True, "token": "xoxb-1"},
+        ],
+    })
+    mtime_before = cj.stat().st_mtime_ns
+
+    # Sleep enough that any rewrite would be detectable.
+    _t.sleep(0.02)
+    load_bot_configs(channels_json=cj, settings_json=Path("/nonexistent"))
+
+    mtime_after = cj.stat().st_mtime_ns
+    assert mtime_after == mtime_before, "list-shape file should not be rewritten"
+
+
+def test_load_persist_can_be_disabled(tmp_path):
+    """Passing persist_migration=False keeps the old shape on disk
+    (useful for read-only audits)."""
+
+    cj = _write_channels(tmp_path, {
+        "slack": {"enabled": True, "token": "xoxb-x"},
+    })
+    load_bot_configs(
+        channels_json=cj,
+        settings_json=Path("/nonexistent"),
+        persist_migration=False,
+    )
+    on_disk = json.loads(cj.read_text())
+    assert isinstance(on_disk["slack"], dict), "persist_migration=False should not rewrite"
+
+
+def test_load_migration_preserves_bot_name_when_present(tmp_path):
+    """If the dict-shape entry already has a `name` key, it's honored
+    (rather than overwritten with 'default')."""
+
+    cj = _write_channels(tmp_path, {
+        "slack": {
+            "name": "production",
+            "enabled": True,
+            "token": "xoxb-1",
+        },
+    })
+    load_bot_configs(channels_json=cj, settings_json=Path("/nonexistent"))
+    on_disk = json.loads(cj.read_text())
+    assert on_disk["slack"][0]["name"] == "production"

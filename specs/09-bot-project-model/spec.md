@@ -1,6 +1,6 @@
 ---
 spec_id: 09-bot-project-model
-status: DRAFT
+status: PARTIAL
 since: 2026-05-24
 until: null
 epic: channels
@@ -184,20 +184,20 @@ self-filter. No cross-bot leakage.
 
 ### P1 — Must Do
 
-- [ ] 1.1 `hyperagent0/channels/config.py` — `ChannelConfig` becomes a per-bot dataclass. New `load_channels_config()` returns `dict[str, list[BotConfig]]`. Backward-compat loader detects dict-shape and wraps to single-element list.
-- [ ] 1.2 Migration: write back the normalized list-shape to `channels.json` on first load. Idempotent.
-- [ ] 1.3 `hyperagent0/channels/migrations/002_bot_name.sql` — add `bot_name` column to `thread_map`, extend unique key.
-- [ ] 1.4 `ThreadStore.get` / `.upsert` / `.touch` / `.all_rows` — all take `bot_name`.
-- [ ] 1.5 `ChannelRouter` — index `self.channels` by `(channel_type, bot_name)`. Dispatch uses bot from inbound's adapter context. Outbound `OutboundMessage` gains `bot_name` field.
-- [ ] 1.6 `lifecycle.start_enabled_channels` — loop over bots, instantiate one adapter per bot. Adapter instances carry their bot_name.
-- [ ] 1.7 `BaseChannel` — add `bot_name: str` attribute, populated at construction.
-- [ ] 1.8 `_default` project bootstrap helper in `hyperagent0/projects.py` (new file). Creates `usr/projects/_default/.a0proj/project.json` if missing. Called from daemon start.
-- [ ] 1.9 Collapse the projectless branches:
+- [x] 1.1 `hyperagent0/channels/config.py` — `ChannelConfig` becomes a per-bot dataclass. New `load_channels_config()` returns `dict[str, list[BotConfig]]`. Backward-compat loader detects dict-shape and wraps to single-element list.
+- [x] 1.2 Migration: write back the normalized list-shape to `channels.json` on first load. Idempotent. `_maybe_persist_normalized()` writes atomically (tempfile + os.replace); skips when already in list-shape; opt-out via `persist_migration=False`.
+- [x] 1.3 `hyperagent0/channels/migrations/002_bot_name.sql` — add `bot_name` column to `thread_map`, extend unique key. SQLite-safe rebuild via temp table swap inside BEGIN/COMMIT.
+- [x] 1.4 `ThreadStore.get` / `.upsert` / `.touch` / `.all_rows` — all take `bot_name` kwarg (default `"_legacy"` matches migration column default).
+- [x] 1.5 `ChannelRouter` — `self.channels` and `self.channel_configs` keyed by `(channel_type, bot_name)`. Dispatch uses `msg.bot_name`. `OutboundMessage` gains `bot_name` field. `_normalize_channel_key()` lets legacy callers pass plain `str` keys.
+- [x] 1.6 `lifecycle.start_enabled_channels` — iterates `load_bot_configs()`, instantiates one adapter per enabled bot, registers each under `(channel_type, bot_name)`. `_channels` map keyed the same way. `running_adapters()` reports bare channel_type for `_legacy` (single-bot) installs so existing status UI keeps working.
+- [x] 1.7 `BaseChannel` — `bot_name: str` attribute populated at construction. Slack/Telegram/Discord adapters propagate it and stamp it on the `InboundMessage`s they build.
+- [x] 1.8 `_default` project bootstrap helper in `hyperagent0/projects.py`. Creates `usr/projects/_default/.a0proj/project.json` if missing. Called from lifecycle.start_enabled_channels at boot.
+- [ ] 1.9 **DEFERRED 2026-05-24** — Collapse the projectless branches:
   - `python/extensions/system_prompt/_10_system_prompt.py:75` — always resolve project_name or "_default"
   - `python/tools/code_execution_tool.py:551` — same
   - `python/helpers/secrets.py:get_secrets_manager` — same
   - `hyperagent0/sandbox/srt.py:_ensure_profile` — same
-  These are upstream edits — minimal one-liner each, NOT a violation of the zero-patch principle because the function is unchanged in shape, just collapses its conditional.
+  Bigger than a one-liner per site: each branch carries different alternate-path semantics (template swap, settings.workdir_path fallback, secrets file-append, sandbox write-allow path). True collapse requires upstream `get_project_folder` to honor a `project_folder` override in project.json + per-site behavior tests. Revisit in a follow-up session.
 - [ ] 1.10 First-run nag in `webui/components/settings/channels/channels.html` — show empty-state banner with "Get started" CTA.
 - [ ] 1.11 `haz status` hint when no bots configured.
 - [ ] 1.12 `channels-store.js` updated to handle list-of-bots shape per platform. Channels UI shows N bot cards per platform (today shows 1 per platform).
@@ -236,3 +236,24 @@ same conversation: the user observed that "projectless = a project
 container for chats" is a clean frame, which means making `_default`
 a real entity (not a null) collapses the existing 4+ branch points
 in upstream + hyperagent0 code.
+
+**2026-05-24 (P1 implementation pass)** — Shipped P1.1–P1.8 in one
+session. Strangler-fig approach with `"_legacy"` as the contract
+literal across migration column DEFAULT, `LEGACY_BOT_NAME` constant,
+`BaseChannel.__init__` default, `InboundMessage`/`OutboundMessage`
+fields, and `_normalize_channel_key()` fallback. 178 channel + haz
+tests pass (was 171); 13 new tests cover migration round-trip,
+ThreadStore bot_name disambiguation, BaseChannel.bot_name, router
+multi-bot dispatch, and write-back migration.
+
+P1.9 (branch-collapse) was deferred — the four sites each have
+different alternate-path semantics and aren't tractable as
+one-liners without upstream `get_project_folder` honoring a
+`project_folder` project.json override + per-site behavior tests.
+Marked in Tasks above; follow-up session.
+
+P1.10–P1.14 (UI + wizard + per-bot secret naming) deferred — the
+foundation is complete and useful for new installs that write
+list-shape channels.json from day one; old installs auto-migrate
+via 1.2. UI/wizard updates are user-facing polish that can come
+in a follow-up without blocking core function.
