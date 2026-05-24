@@ -344,7 +344,7 @@ def load_channels_config(
     channels_json: Optional[Path] = None,
     settings_json: Optional[Path] = None,
 ) -> Dict[str, ChannelConfig]:
-    """Load the channel config map.
+    """Load the channel config map (legacy single-bot view).
 
     Parameters
     ----------
@@ -357,9 +357,26 @@ def load_channels_config(
     -------
     Mapping of channel name → :class:`ChannelConfig`. Channels not
     present in the config file are simply absent from the dict.
+
+    Spec 09 D1 forward-compat: if a platform's value is a list of bots
+    (the spec-09 schema), the first list entry is coerced as the
+    single :class:`ChannelConfig` returned here. That matches the
+    "single-bot install" semantics this function originally provided
+    and prevents legacy callers from breaking when the write-back
+    migration normalizes the on-disk shape.
     """
 
     out: Dict[str, ChannelConfig] = {}
+
+    def _coerce_either_shape(name: str, raw: Any) -> Optional[ChannelConfig]:
+        if isinstance(raw, dict):
+            return _coerce_channel_dict(name, raw)
+        if isinstance(raw, list):
+            for entry in raw:
+                cfg = _coerce_channel_dict(name, entry)
+                if cfg is not None:
+                    return cfg
+        return None
 
     # Layer 1: upstream settings.json (lowest priority).
     settings_path = settings_json or _upstream_settings_path()
@@ -367,7 +384,7 @@ def load_channels_config(
     settings_channels = settings_data.get("channels")
     if isinstance(settings_channels, dict):
         for name, raw in settings_channels.items():
-            cfg = _coerce_channel_dict(name, raw)
+            cfg = _coerce_either_shape(name, raw)
             if cfg is not None:
                 out[name] = cfg
 
@@ -375,7 +392,7 @@ def load_channels_config(
     cj_path = channels_json or channels_config_file()
     cj_data = _read_json(cj_path) or {}
     for name, raw in cj_data.items():
-        cfg = _coerce_channel_dict(name, raw)
+        cfg = _coerce_either_shape(name, raw)
         if cfg is not None:
             out[name] = cfg
 

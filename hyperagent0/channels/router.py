@@ -614,11 +614,19 @@ class ChannelRouter(ChannelSetup):
                 inbound.bot_name,
             )
             return
+        # Carry the inbound's metadata through to the outbound so
+        # platform-specific routing fields (Slack ``channel``, ``ts``,
+        # ``thread_ts``; Telegram ``message_id``; Discord ``guild_id`` /
+        # ``channel_id``) reach the adapter's ``send``. Then layer
+        # ``formatted`` on top so the formatter's pre-built payload
+        # survives.
+        reply_metadata = dict(inbound.metadata or {})
+        reply_metadata["formatted"] = format_for_channel(text, inbound.channel_type)
         outbound = OutboundMessage(
             chat_id=inbound.chat_id,
             text=text,
             reply_to=inbound.metadata.get("message_id"),
-            metadata={"formatted": format_for_channel(text, inbound.channel_type)},
+            metadata=reply_metadata,
             bot_name=inbound.bot_name,
         )
         try:
