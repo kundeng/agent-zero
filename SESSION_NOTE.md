@@ -1,175 +1,176 @@
-# Session note — 2026-05-24
+# Session note — 2026-05-24 (continuation)
 
-Where things stand after the design + spec sprint and partial
-implementation of spec 09.
+Picked up the previous session note and marked through its priority
+list. Three new commits, 182/182 tests pass, spec 09 frontmatter
+flipped DRAFT → PARTIAL.
 
-## Bot is live with the real agent loop wired
+## What got verified
 
-A standalone Python script holds a Socket Mode connection to Slack as
-`@hazbot` in `bayeslearner` AND now invokes the full agent loop on each
-@-mention (not the echo handler from the prior session).
+**LLM proxy works.** `cc/claude-sonnet-4-6` at `localhost:20128`
+streams chat completions cleanly. The 404 the previous session saw
+was either transient or model-name-related; current setup is fine.
+The standalone Slack bot (`/tmp/slack-standalone.py`, PID 2302220) is
+still up and waiting for @-mentions. Restart command from the prior
+note is unchanged.
 
-**Process:** `/tmp/slack-standalone.py` running under `nohup`.
+## What shipped this session
 
-**Log:** `tail -f /tmp/slack-standalone.log`
+| SHA | What |
+|---|---|
+| `f56b905` | Spec 10 D3 correction committed (housekeeping) |
+| `58eee22` | Spec 09 P1.3–P1.7: multi-bot lifecycle + (channel_type, bot_name) routing |
+| `538214b` | Spec 09 P1.2: write-back migration of legacy channels.json |
 
-**Kill:** `pkill -f slack-standalone`
+**Spec 09 P1.1–P1.8 are now all SHIPPED** (status PARTIAL because
+P1.9+ deferred). Foundation supports two bots on the same Slack
+workspace, each binding to a different project — the original user
+request that drove the spec.
 
-**Restart:**
+## Architecture summary of what landed
+
+- **Migration 002** (`hyperagent0/channels/migrations/002_bot_name.sql`):
+  extends `thread_map` PK from `(channel_type, chat_id)` to
+  `(channel_type, bot_name, chat_id)`. SQLite-safe rebuild via temp
+  table swap inside BEGIN/COMMIT. Existing rows keep working as
+  `bot_name='_legacy'`.
+
+- **ThreadStore** signatures take `bot_name` kwarg (default
+  `"_legacy"` matches the migration column default). Composite key
+  is the 3-tuple everywhere.
+
+- **`BaseChannel.bot_name`** attribute set at construction. The
+  three adapters (Slack/Telegram/Discord) propagate it and stamp it
+  on the `InboundMessage`s they build.
+
+- **`InboundMessage` and `OutboundMessage`** dataclasses gained
+  `bot_name: str = "_legacy"` fields so routing key is traceable
+  end-to-end.
+
+- **`ChannelRouter`** keyed by `(channel_type, bot_name)` everywhere
+  — adapters, configs, store calls, reply path. New helper
+  `_normalize_channel_key()` lets pre-spec-09 callers pass plain
+  `str` keys (wrapped as `(str, "_legacy")`) so all existing tests
+  ran unchanged.
+
+- **`lifecycle.start_enabled_channels`** iterates `load_bot_configs()`,
+  instantiates one adapter per enabled bot, registers each under
+  `(channel_type, bot_name)`. `running_adapters()` reports bare
+  `channel_type` for `_legacy` (single-bot) installs so existing
+  status UI consumers (`/channels_status`, `haz channel status`)
+  keep working without UI-side changes.
+
+- **`load_bot_configs(persist_migration=True)`** writes the
+  normalized list-shape back to `~/.hyperagent0/channels.json` on
+  first load if the file was in old dict-shape. Atomic via tempfile
+  + os.replace. `usr/settings.json` is never written (read-only
+  layer).
+
+**The contract literal is `"_legacy"`**, used in 6 places (migration
+column DEFAULT, `LEGACY_BOT_NAME` constant, `BaseChannel.__init__`
+default, two dataclass field defaults, `_normalize_channel_key`
+fallback). If anyone refactors and the literal drifts, single-bot
+installs would silently fork off a new row family separate from
+their migrated history.
+
+## What's deferred
+
+### Spec 09 P1.9 — branch-collapse in upstream (DEFERRED)
+
+The session-note-prior promise of "minimal one-liner each" doesn't
+survive a close read of the call sites:
+
+1. `python/extensions/system_prompt/_10_system_prompt.py:75` — picks
+   between `projects.active.md` and `projects.inactive.md` templates.
+   Different prompt text in each branch.
+2. `python/tools/code_execution_tool.py:551` — falls back to
+   `settings.workdir_path` when no project. Cwd would change without
+   work to make `_default.project_folder = workdir_path` respected.
+3. `python/helpers/secrets.py:get_secrets_manager` — relatively safe;
+   appends per-project secrets.env (SecretsManager skips missing files).
+4. `hyperagent0/sandbox/srt.py:_ensure_profile` — sets sandbox
+   `fs.write.allow` to project_dir. For `_default`, that's
+   `usr/projects/_default/`.
+
+True collapse needs upstream `get_project_folder` to honor a
+`project_folder` override in `project.json` + per-site behavior
+tests. Logged in spec 09 task list as DEFERRED 2026-05-24.
+
+### Spec 09 P1.10–P1.14 (UI / wizard / per-bot secret naming)
+
+Foundation is complete and useful — new installs write list-shape
+channels.json from day one; old installs auto-migrate. UI/wizard
+updates are user-facing polish that can come in a follow-up without
+blocking core function.
+
+## Open work for next session (priority order)
+
+### 1. Live-test the bot
+
+Proxy is verified, foundation is wired. `@hazbot hello` in any
+`bayeslearner` channel should round-trip through the real agent loop
+now. If you see anything odd, the log is at
+`/tmp/slack-standalone.log`.
+
+Worth a restart if the standalone bot has been idle for hours:
 ```bash
+pkill -f slack-standalone
 OPENAI_API_KEY=local-proxy-noauth PYTHONPATH=/home/kundeng/hyperagent-zero \
   nohup .venv/bin/python /tmp/slack-standalone.py > /tmp/slack-standalone.log 2>&1 &
 ```
 
-The `OPENAI_API_KEY` env var is needed even though your local proxy
-doesn't validate it — LiteLLM/openai SDK insists on the variable being
-set. Any value works; "local-proxy-noauth" is fine.
+### 2. Spec 09 P1.9 (branch-collapse) — proper version
 
-## ⚠️ Outstanding LLM proxy issue
-
-Live agent test (`/tmp/test-agent-path.py`) drove a synthetic message
-through the router end-to-end:
-
-- ✅ Agent stack loads, migration runs
-- ✅ ChannelRouter dispatches → AgentContext.communicate() fires
-- ✅ Agent.monologue starts, prepares prompt, calls LLM
-- ❌ LiteLLM call to `http://localhost:20128/v1/chat/completions`
-  returned a 404 HTML page from "9Router - AI Infrastructure
-  Management". Either the proxy endpoint moved, the model name
-  `cc/claude-sonnet-4-6` isn't recognized, or the proxy is misconfigured.
-
-**Action needed from you**: confirm your local proxy is up and the
-endpoint/model is correct. Once it is, the @hazbot replies in Slack
-will be real agent responses, not stubs.
-
-Also: `usr/settings.json` had `workdir_path` missing, which caused an
-extension to try creating `/a0/` on the host. I set it to
-`/home/kundeng/hyperagent-zero/usr/workdir`. Adjust if you want a
-different workdir.
-
-## What shipped this session
-
-Three new specs (drafts) + a real router bug fix + framework code for
-spec 09. Six commits:
-
-| SHA | What |
-|---|---|
-| `4cd541d` | Draft specs 09 (bot+project model), 10 (per-project capabilities), 11 (tool permissions + Claude Code parity) |
-| `6762e28` | Router fix — DeferredTask.result() is async; was being discarded as coroutine (RuntimeWarning + agent reply never picked up) |
-| `7ee4954` | Spec 09 P1 foundation — `_default` project bootstrap + multi-bot channels.json schema with backward-compat loader (14 new tests) |
-
-**171 channel + haz tests pass.**
-
-## Three new specs (drafted, not implemented beyond 09 P1 foundation)
-
-All three drafted in detail at:
-- `specs/09-bot-project-model/spec.md` — multi-bot per platform,
-  `_default` as real project entity, ThreadStore key extension,
-  first-run setup wizard. **Foundation pieces shipped** (`_default`
-  bootstrap + `BotConfig` + `load_bot_configs()` with backward-compat).
-- `specs/10-project-scoped-capabilities/spec.md` — per-project MCP
-  servers (replace global), sandbox network allowlist per-project
-  (layered with global default), `_default`-project skill-bridging.
-  **Not yet implemented.**
-- `specs/11-tool-permissions/spec.md` — Claude-Code-style permission
-  model (allow/deny patterns, default mode ask/auto/bypass), six new
-  native tools (Read/Edit/Write/Glob/Grep/WebFetch), ask round-trip
-  via channel (reuses spec 06 D7 on_action). **Not yet implemented.**
-
-Memory entries saved for the key design decisions so future sessions
-have context without re-asking:
-- `feedback_follow_upstream_silently.md` (from 2026-05-22)
-- `feedback_execute_dont_inflate.md`
-- `project_slack_install_models.md`
-- `project_spec_scope_decisions_2026_05_22.md`
-
-## What I corrected this session
-
-**Skills-leak bug — was wrong.** I diagnosed `python/helpers/skills.py`
-as leaking skills across projects. Re-reading: the agent-execution
-path `list_skills(agent=agent)` IS correctly project-scoped via
-`subagents.get_paths`. The wildcard is only used for admin views
-(Web UI skill browser, CLI lister) which should see all skills.
-Spec 10 D3 updated with the correction.
-
-## Open work for next session (priority order)
-
-### 1. Verify your LLM proxy + chat with the bot live
-
-Trivial gating step. With the proxy working, @-mentioning the bot in
-any bayeslearner channel will round-trip through the real agent loop.
-
-### 2. Spec 09 P1.5–P1.14 — finish the multi-bot integration
-
-Foundation is in but adapters/lifecycle/router still only see the
-first bot per platform (via `load_channels_config()`'s
-backward-compat wrapper). Remaining tasks:
-
-- ThreadStore migration 002: add `bot_name` column, extend unique key
-- `lifecycle.start_enabled_channels`: instantiate one adapter per bot
-- `ChannelRouter`: index by `(channel_type, bot_name)`
-- `BaseChannel`: add `bot_name` attribute, populated at construction
-- Channels UI store: render N bot cards per platform
-- Spec-08 Slack wizard: add bot-name field; secrets keyed by bot
-- Branch collapse in upstream:
-  `python/extensions/system_prompt/_10_system_prompt.py:75`,
-  `python/tools/code_execution_tool.py:551`,
-  `python/helpers/secrets.py:get_secrets_manager`,
-  `hyperagent0/sandbox/srt.py:_ensure_profile` —
-  each can now use `resolve_project_name()` and drop its `if project_name:`
-  branch
-- First-run nag in `webui/components/settings/channels/channels.html`
-- `haz status` hint when no bots configured
+Now that the foundation is in, the branch-collapse becomes a focused
+piece of work. Sequencing:
+- Modify upstream `python/helpers/projects.py:get_project_folder` to
+  honor a `project_folder` override in `project.json`.
+- In `ensure_default_project`, set `project_folder` to the current
+  `settings.workdir_path` so `_default` cwd matches legacy behavior.
+- Add per-site behavior tests covering each of the 4 branches.
+- Then collapse the conditionals to single `resolve_project_name()`
+  calls.
 
 ### 3. Spec 10 P1 — per-project MCP + sandbox network
 
-- `usr/projects/<name>/.a0proj/mcp_servers.json` loader, **replaces**
-  global when present
-- `srt.py:_ensure_profile` reads project.json `network.allow` +
-  global `sandbox_network_default`, writes union
-- Knowledge subdir wiring verification
-- UI editors per project
+Foundation in spec 09 made this tractable. `BotConfig.default_project`
++ `project_overrides` already resolve every inbound to a project
+name; spec 10 P1 builds on that with per-project capability files.
 
 ### 4. Spec 11 P1 — permission model + Claude Code parity tools
 
-- `hyperagent0/permissions.py`: file loader, pattern compilation
-  cache, `resolve_decision(tool_name, args, project) → mode`
-- Hook in `tool_execute_before` extension folder
-- Six new tools: Read, Write, Edit, Glob, Grep, WebFetch
-- Channel ask round-trip via spec 06 D7 `on_action`
-- Default-permissions bootstrap
+Independent of 9 and 10. Can be picked up any time.
 
 ### 5. Daemon vs standalone `invalid_auth` issue (spec 08 P2.5.2)
 
-Still unsolved. Standalone runtime works; full daemon poisons
-slack-bolt's HTTP. The `haz channel run` standalone-mode command
+Still unsolved. The standalone runtime works fine; full daemon
+poisons slack-bolt's HTTP. `haz channel run` standalone-mode command
 (spec 08 P2.5.3) would workaround it production-quality but doesn't
 fix root cause.
 
 ## Things you can do right now to play
 
-- `@hazbot hello` in any channel of bayeslearner (needs `/invite @hazbot`
-  first if not already in the channel) — once the LLM proxy is fixed,
-  responses come from the real agent loop.
+- `@hazbot hello` in any channel of bayeslearner (needs
+  `/invite @hazbot` first if not already there) — with the proxy
+  verified, this should hit the real agent loop.
 - DM `@hazbot` directly — bot has `im:write` scope.
 - Tail the log live: `tail -f /tmp/slack-standalone.log`
-- Browse the new specs: `specs/09-bot-project-model/spec.md`,
-  `specs/10-project-scoped-capabilities/spec.md`,
-  `specs/11-tool-permissions/spec.md`
+- Read the new commits: `git log --oneline 2ee5ccf..HEAD` (everything
+  after the prior session-note refresh).
 
 ## Project structure as it stands
 
-- **Branch**: `v2-hyperagent`. Last 4 commits this session:
-  `7ee4954`, `6762e28`, `4cd541d` (specs), then prior session's
-  `f464c39` (Slack runbook docs).
-- **Tests**: 171 channel + haz tests pass.
+- **Branch**: `v2-hyperagent`. Last 3 commits this session:
+  `538214b`, `58eee22`, `f56b905`. Prior session's tip was `7ee4954`.
+- **Tests**: 182 channel + haz tests pass (was 171 at start; +13 new
+  for spec 09 P1; +1 each for various existing-test additions).
 - **Specs status**:
   - 01 SHIPPED, 02 DRAFT, 03 SHIPPED, 04 SHIPPED, 05 WITHDRAWN,
     06 SHIPPED (D7 P2.1 still open), 07 SHIPPED
   - 08 PARTIAL (D10 pivot pending — `apps.manifest.create` creates
     orphan apps; rework wizard to paste-manifest)
-  - 09 DRAFT (P1 foundation: `_default` + `BotConfig` schema shipped)
-  - 10 DRAFT (no code yet)
+  - **09 PARTIAL** (P1.1–P1.8 SHIPPED; P1.9 DEFERRED, P1.10–P1.14
+    deferred to follow-up)
+  - 10 DRAFT (D3 corrected last session; no code yet)
   - 11 DRAFT (no code yet)
 - **Slack apps in bayeslearner**: A0B5V01R4TE (the working one,
   created via UI from our manifest). Earlier orphans all deleted.
