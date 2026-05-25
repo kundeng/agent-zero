@@ -112,6 +112,20 @@ class DiscordProvisioner(BaseProvisioner):
                 ),
                 fields=[
                     WizardField(
+                        id="bot_name",
+                        label="Bot name",
+                        kind="text",
+                        placeholder="default",
+                        default="default",
+                        required=True,
+                        help_text=(
+                            "Local identifier for this bot — used in "
+                            "logs and per-bot secret keys. Pick a "
+                            "unique name to run more than one Discord "
+                            "bot from this install."
+                        ),
+                    ),
+                    WizardField(
                         id="bot_token",
                         label="Bot token",
                         kind="password",
@@ -206,12 +220,12 @@ class DiscordProvisioner(BaseProvisioner):
                 error_pointer="/bot_token",
             )
 
-        ctx.secrets.write(
-            {
-                "DISCORD_BOT_TOKEN": bot_token,
-                "DISCORD_APPLICATION_ID": application_id,
-            }
-        )
+        from hyperagent0.channels.config import secret_key_for_bot
+
+        ctx.secrets.write({
+            secret_key_for_bot(ctx.bot_name, "DISCORD_BOT_TOKEN"): bot_token,
+            secret_key_for_bot(ctx.bot_name, "DISCORD_APPLICATION_ID"): application_id,
+        })
         ctx.session["bot_username"] = bot_name
         ctx.session["application_id"] = application_id
 
@@ -237,9 +251,13 @@ class DiscordProvisioner(BaseProvisioner):
                 error_pointer="/confirm",
             )
 
-        ctx.channels_config.update_block(
-            self.channel_type, self.channels_json_block(ctx)
-        )
+        block = self.channels_json_block(ctx)
+        if ctx.bot_name:
+            ctx.channels_config.set_bot_block(
+                self.channel_type, ctx.bot_name, block
+            )
+        else:
+            ctx.channels_config.update_block(self.channel_type, block)
 
         return StepResult(
             next_step="summary",
@@ -257,10 +275,13 @@ class DiscordProvisioner(BaseProvisioner):
         )
 
     def test_connection(self, ctx: ProvisionContext) -> str:
-        token = ctx.secrets.read("DISCORD_BOT_TOKEN")
+        from hyperagent0.channels.config import secret_key_for_bot
+
+        key = secret_key_for_bot(ctx.bot_name, "DISCORD_BOT_TOKEN")
+        token = ctx.secrets.read(key)
         if not token:
             raise RuntimeError(
-                "DISCORD_BOT_TOKEN not configured; provision the channel first"
+                f"{key} not configured; provision the channel first"
             )
         me = _discord_get(token, "users/@me")
         username = me.get("username", "?")
@@ -268,12 +289,21 @@ class DiscordProvisioner(BaseProvisioner):
         return f"Connected to Discord as {username}#{disc}."
 
     def channels_json_block(self, ctx: ProvisionContext) -> dict[str, Any]:
-        existing = ctx.channels_config.read_block(self.channel_type)
+        from hyperagent0.channels.config import secret_key_for_bot
+
+        if ctx.bot_name:
+            existing = ctx.channels_config.read_bot_block(
+                self.channel_type, ctx.bot_name
+            )
+        else:
+            existing = ctx.channels_config.read_block(self.channel_type)
+
+        token_key = secret_key_for_bot(ctx.bot_name, "DISCORD_BOT_TOKEN")
         block = dict(existing)
         block.update(
             {
                 "enabled": True,
-                "token": "$$secret(DISCORD_BOT_TOKEN)",
+                "token": f"$$secret({token_key})",
                 "application_id": ctx.session.get("application_id", "")
                 or existing.get("application_id", ""),
             }

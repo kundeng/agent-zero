@@ -108,6 +108,21 @@ class SlackProvisioner(BaseProvisioner):
                 ),
                 fields=[
                     WizardField(
+                        id="bot_name",
+                        label="Bot name",
+                        kind="text",
+                        placeholder="default",
+                        default="default",
+                        required=True,
+                        help_text=(
+                            "Local identifier for this bot. Used in "
+                            "logs, channels.json, and per-bot secret "
+                            "keys. Pick something unique within this "
+                            "haz install if you plan to run more than "
+                            "one Slack bot."
+                        ),
+                    ),
+                    WizardField(
                         id="config_token",
                         label="Configuration access token",
                         kind="password",
@@ -367,15 +382,16 @@ class SlackProvisioner(BaseProvisioner):
             )
 
         # Persist non-token credentials immediately. The bot/app
-        # tokens come later (steps 2/3).
-        ctx.secrets.write(
-            {
-                "SLACK_APP_ID": app_id,
-                "SLACK_CLIENT_ID": client_id,
-                "SLACK_CLIENT_SECRET": client_secret,
-                "SLACK_SIGNING_SECRET": signing_secret,
-            }
-        )
+        # tokens come later (steps 2/3). All keys are passed through
+        # ``secret_key_for_bot`` so a named bot writes the suffixed
+        # form (``SLACK_APP_ID_HAZBOT`` etc.); legacy / default bots
+        # stay on the bare keys their predecessors already used.
+        ctx.secrets.write(_per_bot(ctx.bot_name, {
+            "SLACK_APP_ID": app_id,
+            "SLACK_CLIENT_ID": client_id,
+            "SLACK_CLIENT_SECRET": client_secret,
+            "SLACK_SIGNING_SECRET": signing_secret,
+        }))
 
         # Session scratch — used by step 2 (OAuth callback).
         ctx.session[_K_APP_ID] = app_id
@@ -474,12 +490,10 @@ class SlackProvisioner(BaseProvisioner):
 
         # Persist immediately so a daemon crash mid-flow doesn't lose
         # the bot token (the most expensive thing to re-acquire).
-        ctx.secrets.write(
-            {
-                "SLACK_BOT_TOKEN": bot_token,
-                "SLACK_TEAM_ID": team_id,
-            }
-        )
+        ctx.secrets.write(_per_bot(ctx.bot_name, {
+            "SLACK_BOT_TOKEN": bot_token,
+            "SLACK_TEAM_ID": team_id,
+        }))
         ctx.session[_K_OAUTH_DONE] = True
 
         # Best-effort xapp- mint via config-access token. We don't
@@ -515,7 +529,7 @@ class SlackProvisioner(BaseProvisioner):
                 error_pointer="/bot_token",
             )
 
-        ctx.secrets.write({"SLACK_BOT_TOKEN": bot_token})
+        ctx.secrets.write(_per_bot(ctx.bot_name, {"SLACK_BOT_TOKEN": bot_token}))
         ctx.session[_K_OAUTH_DONE] = True
 
         return StepResult(
@@ -541,13 +555,20 @@ class SlackProvisioner(BaseProvisioner):
                 error_pointer="/app_token",
             )
 
-        ctx.secrets.write({"SLACK_APP_TOKEN": app_token})
+        ctx.secrets.write(_per_bot(ctx.bot_name, {"SLACK_APP_TOKEN": app_token}))
         ctx.session[_K_APP_TOKEN_DONE] = True
 
-        # All tokens present — write the channels.json block.
-        ctx.channels_config.update_block(
-            self.channel_type, self.channels_json_block(ctx)
-        )
+        # All tokens present — append (or replace) the block under
+        # this bot's name in channels.json. Spec 09 D5: list-shape
+        # per platform. Falls back to single-bot dict-shape only when
+        # ctx.bot_name is empty (CLI legacy path).
+        block = self.channels_json_block(ctx)
+        if ctx.bot_name:
+            ctx.channels_config.set_bot_block(
+                self.channel_type, ctx.bot_name, block
+            )
+        else:
+            ctx.channels_config.update_block(self.channel_type, block)
 
         return StepResult(
             next_step="summary",
@@ -576,10 +597,13 @@ class SlackProvisioner(BaseProvisioner):
     # ------------------------------------------------------------------
 
     def test_connection(self, ctx: ProvisionContext) -> str:
-        bot_token = ctx.secrets.read("SLACK_BOT_TOKEN")
+        from hyperagent0.channels.config import secret_key_for_bot
+
+        key = secret_key_for_bot(ctx.bot_name, "SLACK_BOT_TOKEN")
+        bot_token = ctx.secrets.read(key)
         if not bot_token:
             raise RuntimeError(
-                "SLACK_BOT_TOKEN not configured; provision the channel first"
+                f"{key} not configured; provision the channel first"
             )
         auth = auth_test(bot_token)
         user = auth.get("user", "?")
@@ -588,9 +612,12 @@ class SlackProvisioner(BaseProvisioner):
 
     def smoke_post(self, ctx: ProvisionContext, *, channel: str, text: str) -> None:
         """Optional helper for UI 'send a test message' button."""
-        bot_token = ctx.secrets.read("SLACK_BOT_TOKEN")
+        from hyperagent0.channels.config import secret_key_for_bot
+
+        key = secret_key_for_bot(ctx.bot_name, "SLACK_BOT_TOKEN")
+        bot_token = ctx.secrets.read(key)
         if not bot_token:
-            raise RuntimeError("SLACK_BOT_TOKEN not configured")
+            raise RuntimeError(f"{key} not configured")
         chat_post_message(bot_token, channel, text)
 
     # ------------------------------------------------------------------
@@ -599,14 +626,27 @@ class SlackProvisioner(BaseProvisioner):
 
     def channels_json_block(self, ctx: ProvisionContext) -> dict[str, Any]:
         # Preserve any non-token fields a prior install set (e.g.
-        # allowed_users / require_mention configured manually).
-        existing = ctx.channels_config.read_block(self.channel_type)
+        # allowed_users / require_mention configured manually). When
+        # this bot already exists in list-shape channels.json, prefer
+        # its own block over the platform's first entry.
+        from hyperagent0.channels.config import secret_key_for_bot
+
+        if ctx.bot_name:
+            existing = ctx.channels_config.read_bot_block(
+                self.channel_type, ctx.bot_name
+            )
+        else:
+            existing = ctx.channels_config.read_block(self.channel_type)
+
+        bot_token_key = secret_key_for_bot(ctx.bot_name, "SLACK_BOT_TOKEN")
+        app_token_key = secret_key_for_bot(ctx.bot_name, "SLACK_APP_TOKEN")
+
         block = dict(existing)
         block.update(
             {
                 "enabled": True,
-                "token": "$$secret(SLACK_BOT_TOKEN)",
-                "app_token": "$$secret(SLACK_APP_TOKEN)",
+                "token": f"$$secret({bot_token_key})",
+                "app_token": f"$$secret({app_token_key})",
             }
         )
         # Set sensible defaults only if absent — don't clobber user-
@@ -621,6 +661,19 @@ class SlackProvisioner(BaseProvisioner):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _per_bot(bot_name: str, values: dict[str, str]) -> dict[str, str]:
+    """Rewrite a bare-key secrets dict into per-bot suffixed keys.
+
+    Spec 09 task 1.14: secrets land under ``KEY_<BOTNAME>`` so each
+    bot's tokens are independent. Legacy / empty bot names round-trip
+    unchanged via :func:`secret_key_for_bot`.
+    """
+
+    from hyperagent0.channels.config import secret_key_for_bot
+
+    return {secret_key_for_bot(bot_name, k): v for k, v in values.items()}
 
 
 def _truthy(value: Any) -> bool:

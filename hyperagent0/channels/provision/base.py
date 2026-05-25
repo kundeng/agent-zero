@@ -269,6 +269,12 @@ class ProvisionContext:
     #: web server. ``None`` when the CLI runs provisioning in-process.
     #: Provisioners that need to compose redirect URLs read this.
     host_base_url: Optional[str] = None
+    #: Spec 09 D5: which bot this provisioning session is targeting.
+    #: Set by :func:`dispatch.make_context` from the first step's
+    #: ``bot_name`` input (and persisted into ``session.scratch`` so
+    #: later steps recover it). Empty for legacy callers that never
+    #: collected a bot name — secret keys then stay bare.
+    bot_name: str = ""
 
     def new_state_token(self) -> str:
         """Mint a per-step CSRF token for OAuth ``state`` parameters.

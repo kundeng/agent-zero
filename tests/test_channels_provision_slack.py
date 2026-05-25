@@ -490,3 +490,112 @@ def test_required_secrets_complete():
         "SLACK_APP_TOKEN",
     }
     assert set(slack_provisioner.SlackProvisioner.required_secrets) == expected
+
+
+# ---------------------------------------------------------------------------
+# Spec 09 D5 — named-bot provisioning writes per-bot keys + list-shape JSON
+# ---------------------------------------------------------------------------
+
+
+def _make_named_ctx(channels_path: Path, bot_name: str) -> ProvisionContext:
+    """Provision context targeting a non-default bot.
+
+    Mirrors what dispatch.make_context produces when the wizard's first
+    step supplies ``bot_name``: the secrets bridge's allow-list switches
+    to per-bot suffixed keys, and ctx.bot_name is populated so the
+    provisioner can compose the right placeholders.
+    """
+
+    return ProvisionContext(
+        channel_type="slack",
+        session_id="sess-named",
+        session={"bot_name": bot_name},
+        secrets=AllowlistedSecretsBridge(
+            slack_provisioner.SlackProvisioner.required_secrets,
+            bot_name=bot_name,
+        ),
+        channels_config=FileChannelsConfigBridge(path=channels_path),
+        host_base_url="http://localhost:50080",
+        bot_name=bot_name,
+    )
+
+
+def test_named_bot_paste_token_writes_suffixed_secret(isolated_env):
+    """Bot named 'hazbot' → SLACK_BOT_TOKEN_HAZBOT lands in secrets.env."""
+
+    ctx = _make_named_ctx(isolated_env["channels_path"], "hazbot")
+    p = slack_provisioner.SlackProvisioner()
+    result = p.provision(
+        "install_paste_fallback",
+        {"bot_token": "xoxb-named-bot"},
+        ctx,
+    )
+    assert result.error is None
+    secrets_text = (isolated_env["base"] / "usr" / "secrets.env").read_text()
+    assert 'SLACK_BOT_TOKEN_HAZBOT="xoxb-named-bot"' in secrets_text
+    # Bare key must NOT be written for a named bot.
+    assert 'SLACK_BOT_TOKEN="' not in secrets_text
+
+
+def test_named_bot_app_token_appends_to_channels_list_shape(isolated_env):
+    """Final write goes through set_bot_block — list-shape, by-name upsert."""
+
+    ctx = _make_named_ctx(isolated_env["channels_path"], "hazbot")
+    # Pre-write the bot token under per-bot suffix (would come from step 2).
+    ctx.secrets.write({"SLACK_BOT_TOKEN_HAZBOT": "xoxb-pre"})
+
+    p = slack_provisioner.SlackProvisioner()
+    result = p.provision("app_token", {"app_token": "xapp-named"}, ctx)
+    assert result.error is None
+
+    chjson = json.loads(isolated_env["channels_path"].read_text())
+    # List-shape — one entry, our bot.
+    assert isinstance(chjson["slack"], list)
+    assert len(chjson["slack"]) == 1
+    entry = chjson["slack"][0]
+    assert entry["name"] == "hazbot"
+    assert entry["enabled"] is True
+    assert entry["token"] == "$$secret(SLACK_BOT_TOKEN_HAZBOT)"
+    assert entry["app_token"] == "$$secret(SLACK_APP_TOKEN_HAZBOT)"
+    # Raw tokens still never in channels.json.
+    assert "xoxb" not in isolated_env["channels_path"].read_text()
+    assert "xapp" not in isolated_env["channels_path"].read_text()
+
+
+def test_two_named_bots_upsert_into_list(isolated_env):
+    """Provisioning a second bot leaves the first intact and appends."""
+
+    p = slack_provisioner.SlackProvisioner()
+
+    # First bot.
+    ctx1 = _make_named_ctx(isolated_env["channels_path"], "hazbot")
+    ctx1.secrets.write({"SLACK_BOT_TOKEN_HAZBOT": "xoxb-1"})
+    p.provision("app_token", {"app_token": "xapp-1"}, ctx1)
+
+    # Second bot — fresh context, different name.
+    ctx2 = _make_named_ctx(isolated_env["channels_path"], "support-bot")
+    ctx2.secrets.write({"SLACK_BOT_TOKEN_SUPPORT_BOT": "xoxb-2"})
+    p.provision("app_token", {"app_token": "xapp-2"}, ctx2)
+
+    chjson = json.loads(isolated_env["channels_path"].read_text())
+    names = [e["name"] for e in chjson["slack"]]
+    assert names == ["hazbot", "support-bot"]
+    # Each bot's placeholders are independent.
+    assert chjson["slack"][0]["token"] == "$$secret(SLACK_BOT_TOKEN_HAZBOT)"
+    assert (
+        chjson["slack"][1]["token"] == "$$secret(SLACK_BOT_TOKEN_SUPPORT_BOT)"
+    )
+
+
+def test_wizard_first_step_collects_bot_name():
+    """The first step's field list now leads with `bot_name` so the UI
+    pre-fills it before secrets get collected."""
+
+    p = slack_provisioner.SlackProvisioner()
+    first_step = p.wizard_steps()[0]
+    assert first_step.id == "config_token"
+    field_ids = [f.id for f in first_step.fields]
+    assert field_ids[0] == "bot_name", (
+        "bot_name must appear before config_token so the wizard collects "
+        "it before any secrets"
+    )

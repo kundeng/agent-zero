@@ -107,6 +107,20 @@ class TelegramProvisioner(BaseProvisioner):
                 ),
                 fields=[
                     WizardField(
+                        id="bot_name",
+                        label="Bot name",
+                        kind="text",
+                        placeholder="default",
+                        default="default",
+                        required=True,
+                        help_text=(
+                            "Local identifier for this bot — used in "
+                            "logs and per-bot secret keys. Pick a "
+                            "unique name if you plan to run more than "
+                            "one Telegram bot from this install."
+                        ),
+                    ),
+                    WizardField(
                         id="bot_token",
                         label="Bot token",
                         kind="password",
@@ -192,7 +206,11 @@ class TelegramProvisioner(BaseProvisioner):
                     # Non-fatal — token works, just commands didn't take.
                     logger.warning("setMyCommands failed (continuing anyway)")
 
-        ctx.secrets.write({"TELEGRAM_BOT_TOKEN": bot_token})
+        from hyperagent0.channels.config import secret_key_for_bot
+
+        ctx.secrets.write({
+            secret_key_for_bot(ctx.bot_name, "TELEGRAM_BOT_TOKEN"): bot_token,
+        })
         ctx.session["bot_username"] = username
 
         # Build channels.json block.
@@ -202,7 +220,12 @@ class TelegramProvisioner(BaseProvisioner):
             block["allowed_users"] = [
                 u.strip() for u in allowed_users_raw.split(",") if u.strip()
             ]
-        ctx.channels_config.update_block(self.channel_type, block)
+        if ctx.bot_name:
+            ctx.channels_config.set_bot_block(
+                self.channel_type, ctx.bot_name, block
+            )
+        else:
+            ctx.channels_config.update_block(self.channel_type, block)
 
         return StepResult(
             next_step="summary",
@@ -219,10 +242,13 @@ class TelegramProvisioner(BaseProvisioner):
         )
 
     def test_connection(self, ctx: ProvisionContext) -> str:
-        token = ctx.secrets.read("TELEGRAM_BOT_TOKEN")
+        from hyperagent0.channels.config import secret_key_for_bot
+
+        key = secret_key_for_bot(ctx.bot_name, "TELEGRAM_BOT_TOKEN")
+        token = ctx.secrets.read(key)
         if not token:
             raise RuntimeError(
-                "TELEGRAM_BOT_TOKEN not configured; provision the channel first"
+                f"{key} not configured; provision the channel first"
             )
         response = _tg_call(token, "getMe")
         result = response.get("result") or {}
@@ -230,12 +256,21 @@ class TelegramProvisioner(BaseProvisioner):
         return f"Connected to Telegram as @{username}."
 
     def channels_json_block(self, ctx: ProvisionContext) -> dict[str, Any]:
-        existing = ctx.channels_config.read_block(self.channel_type)
+        from hyperagent0.channels.config import secret_key_for_bot
+
+        if ctx.bot_name:
+            existing = ctx.channels_config.read_bot_block(
+                self.channel_type, ctx.bot_name
+            )
+        else:
+            existing = ctx.channels_config.read_block(self.channel_type)
+
+        token_key = secret_key_for_bot(ctx.bot_name, "TELEGRAM_BOT_TOKEN")
         block = dict(existing)
         block.update(
             {
                 "enabled": True,
-                "token": "$$secret(TELEGRAM_BOT_TOKEN)",
+                "token": f"$$secret({token_key})",
             }
         )
         block.setdefault("require_mention", False)

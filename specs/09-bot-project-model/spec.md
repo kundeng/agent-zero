@@ -198,11 +198,11 @@ self-filter. No cross-bot leakage.
   - `python/helpers/secrets.py:get_secrets_manager` — same
   - `hyperagent0/sandbox/srt.py:_ensure_profile` — same
   Bigger than a one-liner per site: each branch carries different alternate-path semantics (template swap, settings.workdir_path fallback, secrets file-append, sandbox write-allow path). True collapse requires upstream `get_project_folder` to honor a `project_folder` override in project.json + per-site behavior tests. Revisit in a follow-up session.
-- [ ] 1.10 First-run nag in `webui/components/settings/channels/channels.html` — show empty-state banner with "Get started" CTA.
-- [ ] 1.11 `haz status` hint when no bots configured.
-- [ ] 1.12 `channels-store.js` updated to handle list-of-bots shape per platform. Channels UI shows N bot cards per platform (today shows 1 per platform).
-- [ ] 1.13 Wizard updated: "what's this bot's name?" added as a field at the top of the Slack/Telegram/Discord wizards.
-- [ ] 1.14 Spec-08 Slack provisioner: `SLACK_BOT_TOKEN` becomes `SLACK_BOT_TOKEN_<botname>` to support multiple bots with distinct secret keys.
+- [x] 1.10 First-run nag in `webui/components/settings/channels/channels.html` — show empty-state banner with "Get started" CTA.
+- [x] 1.11 `haz status` hint when no bots configured.
+- [x] 1.12 `channels-store.js` updated to handle list-of-bots shape per platform. Channels UI shows N bot cards per platform. `/channels_status` rewritten to emit one row per `(channel_type, bot_name)` plus a placeholder row per unconfigured platform; live lookup honors both bare `channel_type` (legacy) and `channel_type/bot_name` keys.
+- [x] 1.13 Wizard updated: `bot_name` field added at the top of the first input step of every provisioner (Slack/Telegram/Discord). `dispatch.run_step` extracts it from inputs or session and threads it through `ctx.bot_name` and the per-bot `AllowlistedSecretsBridge`. Frontend `_suggestBotName()` picks the first available of `["default","bot1","bot2",...]`. Bridge gains `set_bot_block/read_bot_block/list_bot_names` for by-name upsert into the platform's list.
+- [x] 1.14 Per-bot secret keys: `secret_key_for_bot(bot_name, key)` returns the bare key for `_legacy`/`default`/empty, otherwise `KEY_<BOTNAME>` (uppercase, dashes → underscores). All three provisioners route their secret writes and `$$secret(...)` placeholders through it.
 
 ### P2 — Should Do
 
@@ -257,3 +257,55 @@ foundation is complete and useful for new installs that write
 list-shape channels.json from day one; old installs auto-migrate
 via 1.2. UI/wizard updates are user-facing polish that can come
 in a follow-up without blocking core function.
+
+**2026-05-25 (P1.10–P1.14 shipped)** — Multi-bot UI/wizard/secret
+work landed in one session:
+
+* `/channels_status` rewritten to emit one row per
+  `(channel_type, bot_name)` plus a placeholder per unconfigured
+  platform. Per-bot fields (`bot_name`, `default_project`,
+  `project_overrides`, `enabled`, `require_mention`,
+  `allowed_users`, `allowed_chats`) ride on each row; live lookup
+  honors both bare `channel_type` (legacy) and `channel_type/bot_name`.
+* `channels-store.js` switched to composite cardKey
+  `${channel_type}:${bot_name}`, added `isLastOfPlatform` /
+  `isFirstBotOfPlatform` / `isLegacyBot` / `hasNoRealBots` /
+  `_suggestBotName` helpers; test/bind controls hidden on bots
+  #2+ pending per-bot endpoints.
+* Channels tab template renders N cards per platform with
+  bot-name suffix (`Slack — default`), per-platform
+  "+ Add another <ct> bot" button, and a first-run banner that
+  fires when no real bots are configured.
+* Each provisioner's first input step gains a required `bot_name`
+  field with help text; `dispatch.run_step` resolves bot_name
+  from inputs OR a previously stashed `session.scratch["bot_name"]`
+  and threads it through `ctx.bot_name`.
+* `AllowlistedSecretsBridge(required_secrets, bot_name=…)` now
+  computes its allow-list via the new
+  `hyperagent0.channels.config.secret_key_for_bot(bot_name, key)`
+  helper, which returns the bare key for `""`/`_legacy`/`default`
+  and `KEY_<BOTNAME>` (uppercase, dashes → underscores) otherwise.
+  All three provisioners route writes and `$$secret(...)`
+  placeholders through this helper.
+* `channels_config_bridge` gains
+  `list_bot_names`/`read_bot_block`/`set_bot_block`. The last is
+  the atomic by-name upsert provisioners use to land a new bot
+  into the platform's list (normalizing legacy dict-shape on the
+  fly); empty bot_name falls back to `update_block` so the CLI
+  legacy path still writes dict-shape.
+* `haz channel status` rewritten to iterate `(channel_type, bot_name)`,
+  print bot rows like `slack/default`, and emit a
+  "No bots configured. Run \`haz channel provision slack\` to add one."
+  hint when no real bot is set up.
+
+Tests: 219/219 channel+haz pass (was 210). New test files:
+`tests/test_channels_status.py` (3), `tests/test_channels_config_bridge_multibot.py`
+(11). Extended: `tests/test_channels_provision_slack.py` (+4 named-bot
+tests). Live-verified: the standalone Slack bot at
+`/tmp/slack-standalone.py` restarted cleanly under the new code
+(Socket Mode `s_7708108121942` established); UI screenshot
+confirms "Slack — default" card with live badge, "Add another"
+button, and wizard pre-filling `bot_name=bot1` on the next bot.
+
+P1.9 (branch-collapse for projectless / `_default` unification)
+remains deferred — same reasoning as the 2026-05-24 entry.

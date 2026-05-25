@@ -33,79 +33,127 @@
         Loading channels…
       </div>
 
+      <!-- First-run nag (spec 09 task 1.10): shown when no operator
+           has set up a real (named) bot yet. Placeholder rows and
+           legacy single-bot installs both look like "no real bots". -->
+      <div class="channels-first-run"
+           x-show="!$store.channelsStore.loading && $store.channelsStore.hasNoRealBots()">
+        <strong>No bots configured yet.</strong>
+        Set one up to chat from Slack, Telegram, or Discord.
+        <button class="btn slim primary"
+                @click="$store.channelsStore.startWizard('slack')">
+          Get started
+        </button>
+      </div>
+
       <!-- Channel cards -->
       <div class="channels-list" x-show="!$store.channelsStore.loading">
-        <template x-for="ch in $store.channelsStore.channels" :key="ch.channel_type">
-          <div class="channel-card">
+        <template x-for="(ch, idx) in $store.channelsStore.channels"
+                  :key="$store.channelsStore.cardKey(ch)">
+          <div>
+            <div class="channel-card">
 
-            <!-- Header row: status dot + platform name + live/enabled badges -->
-            <div class="channel-header">
-              <div class="status-dot" :class="{
-                'dot-live': ch.live,
-                'dot-configured': ch.configured && !ch.live,
-                'dot-empty': !ch.configured
-              }"></div>
-              <span class="channel-name" x-text="ch.channel_type"></span>
-              <span class="channel-badge live" x-show="ch.live">live</span>
-              <span class="channel-badge enabled" x-show="!ch.live && ch.enabled">enabled (not running)</span>
-              <span class="channel-badge configured" x-show="!ch.live && !ch.enabled && ch.configured">configured</span>
-              <span class="channel-badge empty" x-show="!ch.configured">not configured</span>
+              <!-- Header row: status dot + platform name (+ bot name) + badges -->
+              <div class="channel-header">
+                <div class="status-dot" :class="{
+                  'dot-live': ch.live,
+                  'dot-configured': ch.configured && !ch.live,
+                  'dot-empty': !ch.configured
+                }"></div>
+                <span class="channel-name" x-text="ch.channel_type"></span>
+                <!-- Bot name suffix shown only for named bots (not the
+                     legacy single-bot path, where it would add noise). -->
+                <span class="bot-name-suffix"
+                      x-show="ch.bot_name && !$store.channelsStore.isLegacyBot(ch)"
+                      x-text="'— ' + ch.bot_name"></span>
+                <span class="channel-badge live" x-show="ch.live">live</span>
+                <span class="channel-badge enabled" x-show="!ch.live && ch.enabled">enabled (not running)</span>
+                <span class="channel-badge configured" x-show="!ch.live && !ch.enabled && ch.configured">configured</span>
+                <span class="channel-badge empty" x-show="!ch.configured">not configured</span>
 
-              <div class="channel-actions">
-                <button class="btn slim"
-                        @click="$store.channelsStore.startWizard(ch.channel_type)">
-                  <span x-text="ch.configured ? 'Re-provision' : 'Provision'"></span>
-                </button>
-                <button class="btn slim"
-                        :disabled="!ch.configured"
-                        @click="$store.channelsStore.testConnection(ch.channel_type)">
-                  Test
-                </button>
+                <div class="channel-actions">
+                  <button class="btn slim"
+                          @click="$store.channelsStore.startWizard(ch.channel_type)">
+                    <span x-text="ch.configured ? 'Re-provision' : 'Provision'"></span>
+                  </button>
+                  <!-- Test button hidden on additional bots until
+                       /channels_test learns bot_name dispatch (the
+                       channel-level test would otherwise mislead). -->
+                  <button class="btn slim"
+                          :disabled="!ch.configured"
+                          x-show="!ch.bot_name || $store.channelsStore.isFirstBotOfPlatform(idx)"
+                          @click="$store.channelsStore.testConnection(ch.channel_type, ch.bot_name)">
+                    Test
+                  </button>
+                </div>
               </div>
+
+              <!-- Secret status -->
+              <div class="channel-secrets" x-show="ch.required_secrets?.length">
+                <span class="label">Secrets:</span>
+                <template x-for="key in ch.required_secrets" :key="key">
+                  <span class="secret-chip"
+                        :class="{ 'has': ch.configured_secrets[key], 'missing': !ch.configured_secrets[key] }"
+                        x-text="key"></span>
+                </template>
+              </div>
+
+              <!-- Test result (keyed by composite cardKey) -->
+              <div class="channel-test-result"
+                   x-show="$store.channelsStore.testResults[$store.channelsStore.cardKey(ch)]"
+                   :class="$store.channelsStore.testResults[$store.channelsStore.cardKey(ch)]?.ok ? 'test-ok' : 'test-err'">
+                <span x-text="$store.channelsStore.testResults[$store.channelsStore.cardKey(ch)]?.busy
+                  ? 'Testing…'
+                  : ($store.channelsStore.testResults[$store.channelsStore.cardKey(ch)]?.message || '')"></span>
+              </div>
+
+              <!-- Project binding (D7) — hidden on bots #2+ because
+                   /channels_bind_project doesn't yet route by bot. -->
+              <div class="channel-project"
+                   x-show="ch.configured && (!ch.bot_name || $store.channelsStore.isFirstBotOfPlatform(idx))">
+                <span class="label">Default project:</span>
+                <input type="text"
+                       class="bind-input"
+                       placeholder="(none)"
+                       :value="ch.project_binding?.default || ''"
+                       @change.debounce.500ms="$store.channelsStore.bindProject(
+                         ch.channel_type, null, $event.target.value
+                       )">
+                <small class="hint">
+                  Type a project name to route all chats on this channel to it.
+                  Leave blank for "use default context".
+                </small>
+              </div>
+
+              <!-- Per-bot default project (read-only for now — multi-bot
+                   binding edits land in spec 10's project UI). -->
+              <div class="channel-project read-only"
+                   x-show="ch.bot_name && !$store.channelsStore.isFirstBotOfPlatform(idx) && ch.default_project">
+                <span class="label">Default project:</span>
+                <span class="bind-readonly" x-text="ch.default_project"></span>
+              </div>
+
+              <!-- Bootstrap link -->
+              <div class="channel-bootstrap" x-show="ch.bootstrap_url && !ch.configured">
+                First, get your bootstrap credential at
+                <a :href="ch.bootstrap_url" target="_blank" rel="noopener noreferrer"
+                   x-text="ch.bootstrap_url"></a>
+              </div>
+
             </div>
 
-            <!-- Secret status -->
-            <div class="channel-secrets" x-show="ch.required_secrets?.length">
-              <span class="label">Secrets:</span>
-              <template x-for="key in ch.required_secrets" :key="key">
-                <span class="secret-chip"
-                      :class="{ 'has': ch.configured_secrets[key], 'missing': !ch.configured_secrets[key] }"
-                      x-text="key"></span>
-              </template>
+            <!-- "Add another bot" appears once per platform, on the
+                 last card of that platform's group. Placeholder rows
+                 (bot_name === "") already act as the entry point via
+                 their "Provision" button, so we skip the add-button
+                 in that case to avoid double-CTAs. -->
+            <div class="channel-add-bot"
+                 x-show="ch.bot_name && $store.channelsStore.isLastOfPlatform(idx)">
+              <button class="btn slim secondary"
+                      @click="$store.channelsStore.startWizard(ch.channel_type)">
+                + Add another <span x-text="ch.channel_type"></span> bot
+              </button>
             </div>
-
-            <!-- Test result -->
-            <div class="channel-test-result"
-                 x-show="$store.channelsStore.testResults[ch.channel_type]"
-                 :class="$store.channelsStore.testResults[ch.channel_type]?.ok ? 'test-ok' : 'test-err'">
-              <span x-text="$store.channelsStore.testResults[ch.channel_type]?.busy
-                ? 'Testing…'
-                : ($store.channelsStore.testResults[ch.channel_type]?.message || '')"></span>
-            </div>
-
-            <!-- Project binding (D7) -->
-            <div class="channel-project" x-show="ch.configured">
-              <span class="label">Default project:</span>
-              <input type="text"
-                     class="bind-input"
-                     placeholder="(none)"
-                     :value="ch.project_binding?.default || ''"
-                     @change.debounce.500ms="$store.channelsStore.bindProject(
-                       ch.channel_type, null, $event.target.value
-                     )">
-              <small class="hint">
-                Type a project name to route all chats on this channel to it.
-                Leave blank for "use default context".
-              </small>
-            </div>
-
-            <!-- Bootstrap link -->
-            <div class="channel-bootstrap" x-show="ch.bootstrap_url && !ch.configured">
-              First, get your bootstrap credential at
-              <a :href="ch.bootstrap_url" target="_blank" rel="noopener noreferrer"
-                 x-text="ch.bootstrap_url"></a>
-            </div>
-
           </div>
         </template>
 
@@ -167,6 +215,45 @@
   .channel-name {
     font-weight: 600;
     text-transform: capitalize;
+  }
+  .bot-name-suffix {
+    color: var(--color-text-secondary, #888);
+    font-size: 0.85rem;
+    font-weight: 500;
+  }
+  .channel-add-bot {
+    margin: 0.4em 0 0.8em 1.6em;
+    font-size: 0.85rem;
+  }
+  .channel-add-bot .btn.secondary {
+    background: rgba(192, 192, 192, 0.08);
+    color: var(--color-text-secondary, #aaa);
+  }
+  .channel-project.read-only {
+    flex-direction: row;
+    gap: 0.4em;
+    align-items: baseline;
+  }
+  .channels-first-run {
+    padding: 0.8em 1em;
+    margin-bottom: 1em;
+    background: rgba(0, 195, 64, 0.08);
+    border-left: 3px solid #00c340;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 0.8em;
+    flex-wrap: wrap;
+  }
+  .channels-first-run strong {
+    color: #00c340;
+  }
+  .channels-first-run .btn.primary {
+    margin-left: auto;
+  }
+  .bind-readonly {
+    font-family: monospace;
+    color: var(--color-text, inherit);
   }
   .channel-badge {
     font-size: 0.75rem;

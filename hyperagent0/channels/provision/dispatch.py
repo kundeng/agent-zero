@@ -88,6 +88,7 @@ def make_context(
     *,
     host_base_url: Optional[str] = None,
     cache: Optional[SessionCache] = None,
+    bot_name: str = "",
 ) -> ProvisionContext:
     """Build a :class:`ProvisionContext` for one dispatch.
 
@@ -95,6 +96,11 @@ def make_context(
     and returns a fully wired context. Pass ``cache`` for test
     isolation; production callers omit it to get the module-wide
     singleton.
+
+    ``bot_name`` (spec 09 task 1.13) seeds the per-bot secret-key
+    allow-list. Empty / legacy names produce the bare keys; named
+    bots produce ``KEY_<BOTNAME>`` so multi-bot installs don't
+    collide. Provisioners read it back via :attr:`ctx.bot_name`.
     """
 
     cls = get_provisioner(channel_type)
@@ -116,9 +122,10 @@ def make_context(
         channel_type=channel_type,
         session_id=session.session_id,
         session=session.scratch,
-        secrets=AllowlistedSecretsBridge(cls.required_secrets),
+        secrets=AllowlistedSecretsBridge(cls.required_secrets, bot_name=bot_name),
         channels_config=FileChannelsConfigBridge(),
         host_base_url=host_base_url,
+        bot_name=bot_name,
     )
 
 
@@ -156,11 +163,34 @@ def run_step(
     and translated to :class:`StepResult` error shapes — that gives
     the UI one consistent error path instead of one for HTTP 500s and
     another for in-band validation failures.
+
+    Spec 09 task 1.13: the dispatch sniffs ``inputs["bot_name"]`` (set
+    by the wizard's first step) and falls back to a previously stashed
+    ``session.scratch["bot_name"]`` so subsequent steps inherit the
+    same bot identity. The resolved value seeds both the per-bot
+    secret bridge and :attr:`ctx.bot_name`.
     """
 
     ensure_provisioners_loaded()
+
+    # Resolve bot_name BEFORE building the context so the secret
+    # bridge's allow-list matches the keys the provisioner will write.
+    sessions = cache or default_cache()
+    session = sessions.get_or_start(channel_type, session_id)
+    bot_name = (
+        str(inputs.get("bot_name") or "").strip()
+        or str(session.scratch.get("bot_name") or "").strip()
+    )
+    # Persist so future steps in this session don't need to resend it.
+    if bot_name:
+        session.scratch["bot_name"] = bot_name
+
     ctx = make_context(
-        channel_type, session_id, host_base_url=host_base_url, cache=cache
+        channel_type,
+        session.session_id,
+        host_base_url=host_base_url,
+        cache=cache,
+        bot_name=bot_name,
     )
     provisioner = get_provisioner_instance(channel_type)
     try:

@@ -52,8 +52,21 @@ class AllowlistedSecretsBridge:
     Writes through it are filtered against that list.
     """
 
-    def __init__(self, required_secrets: Iterable[str]) -> None:
-        self._allowed = {k.upper() for k in required_secrets}
+    def __init__(
+        self,
+        required_secrets: Iterable[str],
+        *,
+        bot_name: str = "",
+    ) -> None:
+        # Spec 09 task 1.14: when ``bot_name`` names a non-legacy bot,
+        # the allow-list becomes the per-bot suffixed forms so two bots
+        # on the same platform hold independent tokens. Legacy/empty
+        # bot names keep the bare keys (strangler-fig contract).
+        from .config import secret_key_for_bot
+
+        self._allowed = {
+            secret_key_for_bot(bot_name, k).upper() for k in required_secrets
+        }
 
     # ------------------------------------------------------------------
     # SecretsBridge protocol implementation

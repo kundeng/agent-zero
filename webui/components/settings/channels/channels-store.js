@@ -72,14 +72,83 @@ const model = {
     try {
       const resp = await API.callJsonApi("channels_status", {});
       if (resp.success) {
-        // Stable order: alphabetic by channel_type.
-        this.channels = (resp.channels || []).sort((a, b) =>
-          a.channel_type.localeCompare(b.channel_type)
-        );
+        // Stable order: alphabetic by channel_type, then bot_name. Sort
+        // by bot_name secondarily so the "Add another bot" button lands
+        // after every existing bot of a platform (see isLastOfPlatform).
+        this.channels = (resp.channels || []).slice().sort((a, b) => {
+          const t = a.channel_type.localeCompare(b.channel_type);
+          if (t !== 0) return t;
+          return (a.bot_name || "").localeCompare(b.bot_name || "");
+        });
       }
     } catch (e) {
       console.error("channels_status failed:", e);
     }
+  },
+
+  // ------------------------------------------------------------------
+  // Per-card helpers (spec 09 task 1.12)
+  // ------------------------------------------------------------------
+
+  /**
+   * Composite key for a channel card — same shape as the (channel_type,
+   * bot_name) ThreadStore key. Used as `:key` in x-for and as the
+   * lookup key into `testResults`.
+   */
+  cardKey(ch) {
+    return `${ch.channel_type}:${ch.bot_name || ""}`;
+  },
+
+  /**
+   * True iff `ch` is the last card of its platform (in the sorted
+   * `channels` array). Drives placement of the per-platform
+   * "+ Add another bot" button.
+   */
+  isLastOfPlatform(idx) {
+    const next = this.channels[idx + 1];
+    return !next || next.channel_type !== this.channels[idx].channel_type;
+  },
+
+  /**
+   * True iff the card's bot is the pre-spec-09 ``_legacy`` constant.
+   * Only those hide the bot_name suffix — migrated installs end up
+   * with bot_name="default" and SHOULD surface that label so the
+   * operator can see the entity that exists and reason about adding
+   * a second bot beside it.
+   */
+  isLegacyBot(ch) {
+    return ch.bot_name === "_legacy";
+  },
+
+  /**
+   * True iff this card is the first real bot of its platform. The
+   * Test / Default-project controls are hidden on additional bots
+   * because the server endpoints behind them
+   * (/channels_test, /channels_bind_project) still key by
+   * channel_type only — leaving them visible would let an operator
+   * accidentally apply a binding meant for bot #2 to bot #1.
+   */
+  isFirstBotOfPlatform(idx) {
+    const ch = this.channels[idx];
+    if (!ch || !ch.bot_name) return false;
+    const prev = this.channels[idx - 1];
+    return !prev || prev.channel_type !== ch.channel_type;
+  },
+
+  /**
+   * True iff every entry's bot_name is empty (placeholder) or a
+   * legacy name — i.e. no operator has ever set up a named bot. The
+   * Channels tab uses this to show the spec 09 D4 first-run banner.
+   */
+  hasNoRealBots() {
+    if (!this.channels.length) return true;
+    // Placeholder rows have bot_name === ""; pre-spec-09 adapters
+    // report bot_name === "_legacy". Neither counts as a real bot.
+    // bot_name === "default" IS a real (migrated) bot — operators
+    // should see it instead of the first-run banner.
+    return this.channels.every(
+      (c) => !c.bot_name || c.bot_name === "_legacy"
+    );
   },
 
   // ------------------------------------------------------------------
@@ -121,10 +190,35 @@ const model = {
           }
         }
       }
+      // Spec 09 task 1.13: suggest a unique bot_name based on what
+      // already exists for this platform. The provisioner's field
+      // default is just "default"; we override it here when that
+      // name is already taken so the operator doesn't have to retype.
+      this.wizard.inputs.bot_name = this._suggestBotName(channelType);
       this._setCurrentStep(0);
     } catch (e) {
       this.wizard.error = String(e);
     }
+  },
+
+  /**
+   * Pick the first name in ["default", "bot1", "bot2", ...] not yet
+   * taken by an existing bot on this platform. Hits placeholder rows
+   * too (bot_name === "") so adding the first bot still suggests
+   * "default".
+   */
+  _suggestBotName(channelType) {
+    const taken = new Set(
+      this.channels
+        .filter((c) => c.channel_type === channelType && c.bot_name)
+        .map((c) => c.bot_name)
+    );
+    if (!taken.has("default")) return "default";
+    for (let i = 1; i < 100; i++) {
+      const candidate = `bot${i}`;
+      if (!taken.has(candidate)) return candidate;
+    }
+    return "default";
   },
 
   cancelWizard() {
@@ -321,19 +415,24 @@ const model = {
     }
   },
 
-  async testConnection(channelType) {
-    this.testResults[channelType] = { busy: true };
+  async testConnection(channelType, botName = "") {
+    // Composite key matches the cardKey() shape so the result lands
+    // on the right card. The /channels_test endpoint itself is still
+    // channel-level (no bot_name dispatch), so multi-bot installs
+    // hide the Test button on bots #2+ — see isFirstBotOfPlatform.
+    const key = `${channelType}:${botName || ""}`;
+    this.testResults[key] = { busy: true };
     try {
       const resp = await API.callJsonApi("channels_test", {
         channel_type: channelType,
       });
-      this.testResults[channelType] = {
+      this.testResults[key] = {
         busy: false,
         ok: !!resp.success,
         message: resp.message || resp.error || "",
       };
     } catch (e) {
-      this.testResults[channelType] = {
+      this.testResults[key] = {
         busy: false,
         ok: false,
         message: String(e),

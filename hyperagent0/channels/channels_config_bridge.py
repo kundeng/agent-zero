@@ -122,6 +122,112 @@ class FileChannelsConfigBridge:
         data[channel_type] = dict(block)
         _write_atomic(self._path, data)
 
+    # ------------------------------------------------------------------
+    # Multi-bot helpers (spec 09 task 1.12 + 1.13)
+    # ------------------------------------------------------------------
+
+    def list_bot_names(self, channel_type: str) -> list[str]:
+        """Return the names of every bot currently configured for ``channel_type``.
+
+        Used by the wizard to suggest a unique default bot_name when
+        the operator adds another bot. Honors both schema shapes:
+        dict-shape legacy entries surface as ``["default"]``;
+        list-shape entries return their declared names.
+        """
+
+        data = _read(self._path)
+        value = data.get(channel_type)
+        if isinstance(value, dict):
+            return [str(value.get("name") or "default")]
+        if isinstance(value, list):
+            out: list[str] = []
+            for i, entry in enumerate(value):
+                if isinstance(entry, dict):
+                    out.append(str(entry.get("name") or f"bot{i}"))
+            return out
+        return []
+
+    def read_bot_block(self, channel_type: str, bot_name: str) -> dict[str, Any]:
+        """Return the block for one named bot, or ``{}`` if absent.
+
+        Normalizes the dict-shape legacy schema on the fly: a dict-shape
+        ``channels.json`` is treated as if its bot were named
+        ``"default"``. Pure read — never mutates disk.
+        """
+
+        data = _read(self._path)
+        value = data.get(channel_type)
+        if isinstance(value, dict):
+            existing_name = str(value.get("name") or "default")
+            if existing_name == bot_name or bot_name in ("", "default"):
+                return dict(value)
+            return {}
+        if isinstance(value, list):
+            for i, entry in enumerate(value):
+                if not isinstance(entry, dict):
+                    continue
+                entry_name = str(entry.get("name") or f"bot{i}")
+                if entry_name == bot_name:
+                    return dict(entry)
+        return {}
+
+    def set_bot_block(
+        self,
+        channel_type: str,
+        bot_name: str,
+        block: dict[str, Any],
+    ) -> None:
+        """Upsert ``block`` under ``bot_name`` inside the platform's list.
+
+        Normalizes the on-disk shape to spec 09 list-of-bots as a side
+        effect: a dict-shape entry is wrapped into a single-element list
+        keyed by its own ``name`` (or ``"default"``) before the upsert
+        runs. The block is written with ``name`` set to ``bot_name`` so
+        :func:`hyperagent0.channels.config.load_bot_configs` reads it
+        back correctly without further migration.
+
+        Atomic-rename write — same guarantees as :meth:`update_block`.
+        """
+
+        if not bot_name:
+            # Empty name is the strangler-fig legacy signal — fall
+            # through to the older single-bot writer so behavior matches
+            # spec-04 callers that never collected a bot_name.
+            self.update_block(channel_type, block)
+            return
+
+        data = _read(self._path)
+        value = data.get(channel_type)
+
+        # Normalize current value to a list-of-bots regardless of shape.
+        bots: list[dict[str, Any]]
+        if isinstance(value, dict):
+            wrapped = dict(value)
+            wrapped.setdefault("name", "default")
+            bots = [wrapped]
+        elif isinstance(value, list):
+            bots = [dict(e) for e in value if isinstance(e, dict)]
+        else:
+            bots = []
+
+        # Stamp the name so the loader's fallback_name logic never has
+        # to guess. Upsert by name (case-sensitive — matches
+        # secret_key_for_bot's normalization).
+        new_entry = dict(block)
+        new_entry["name"] = bot_name
+
+        replaced = False
+        for i, existing in enumerate(bots):
+            if str(existing.get("name") or f"bot{i}") == bot_name:
+                bots[i] = new_entry
+                replaced = True
+                break
+        if not replaced:
+            bots.append(new_entry)
+
+        data[channel_type] = bots
+        _write_atomic(self._path, data)
+
     def update_project_binding(
         self,
         channel_type: str,

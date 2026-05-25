@@ -199,6 +199,32 @@ class BotConfig:
         return resolve_project_name(self.default_project)
 
 
+LEGACY_BOT_NAMES = frozenset({"_legacy", "default"})
+
+
+def secret_key_for_bot(bot_name: str, secret_key: str) -> str:
+    """Resolve the per-bot secret-store key (spec 09 task 1.14).
+
+    The strangler-fig contract: bots named ``"_legacy"`` (the spec-04
+    single-bot literal) and ``"default"`` (the migration default for
+    converted dict-shape installs) keep using the bare secret key so
+    pre-spec-09 secret stores keep resolving. Any other bot name gets
+    a per-bot suffix, so two Slack bots in the same install can hold
+    independent ``SLACK_BOT_TOKEN_<NAME>`` values without colliding.
+
+    The suffix normalization (upper, ``-`` → ``_``) matches the case
+    folding ``SecretsManager`` applies to keys on read.
+    """
+
+    # An empty bot_name behaves like the strangler-fig legacy names —
+    # tests and the CLI path that haven't supplied one yet keep writing
+    # to the bare keys their predecessors already populated.
+    if not bot_name or bot_name in LEGACY_BOT_NAMES:
+        return secret_key
+    suffix = bot_name.upper().replace("-", "_")
+    return f"{secret_key}_{suffix}"
+
+
 def _coerce_bot_dict(channel_type: str, raw: Any, *, fallback_name: str) -> Optional[BotConfig]:
     """Coerce one bot entry. ``fallback_name`` used when ``raw`` has no name."""
 

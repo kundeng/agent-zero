@@ -80,9 +80,15 @@ def cmd_list() -> None:
 @command.command("status")
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
 def cmd_status(as_json: bool) -> None:
-    """Show per-channel configured/enabled/live state."""
+    """Show per-bot configured/enabled/live state (spec 09 task 1.11).
 
-    from hyperagent0.channels.channels_config_bridge import FileChannelsConfigBridge
+    Multi-bot installs report one row per ``(channel_type, bot_name)``;
+    a platform with no configured bots still shows up once as a
+    placeholder so the operator sees what's available to provision.
+    Prints a "no bots configured" hint when nothing is set up.
+    """
+
+    from hyperagent0.channels.config import load_bot_configs, secret_key_for_bot
     from hyperagent0.channels.lifecycle import running_adapters
     from hyperagent0.channels.provision.dispatch import (
         ensure_provisioners_loaded,
@@ -91,25 +97,49 @@ def cmd_status(as_json: bool) -> None:
     from hyperagent0.channels.secrets_bridge import AllowlistedSecretsBridge
 
     ensure_provisioners_loaded()
-    bridge = FileChannelsConfigBridge()
+    bots_by_platform = load_bot_configs()
     live = running_adapters()
+
     rows: list[dict[str, Any]] = []
     for entry in list_provisioners():
         ct = entry["channel_type"]
-        block = bridge.read_block(ct)
-        reader = AllowlistedSecretsBridge(entry["required_secrets"])
-        configured_secrets = {
-            k: bool(reader.read(k)) for k in entry["required_secrets"]
-        }
-        rows.append(
-            {
+        bots = bots_by_platform.get(ct, [])
+        if not bots:
+            rows.append(_status_row(
+                channel_type=ct,
+                bot_name="",
+                required_secrets=entry["required_secrets"],
+                enabled=False,
+                live=False,
+            ))
+            continue
+        for bot in bots:
+            per_bot_keys = [
+                secret_key_for_bot(bot.bot_name, k)
+                for k in entry["required_secrets"]
+            ]
+            reader = AllowlistedSecretsBridge(per_bot_keys)
+            configured_secrets = {k: bool(reader.read(k)) for k in per_bot_keys}
+            composite = f"{ct}/{bot.bot_name}"
+            is_live = bool(
+                live.get(composite, {}).get("live")
+                or (
+                    bot.bot_name in ("_legacy", "default")
+                    and live.get(ct, {}).get("live")
+                )
+            )
+            rows.append({
                 "channel_type": ct,
-                "enabled": bool(block.get("enabled", False)),
-                "configured": all(configured_secrets.values()) if configured_secrets else False,
-                "live": bool(live.get(ct, {}).get("live", False)),
+                "bot_name": bot.bot_name,
+                "enabled": bool(bot.enabled),
+                "configured": (
+                    all(configured_secrets.values())
+                    if configured_secrets
+                    else False
+                ),
+                "live": is_live,
                 "configured_secrets": configured_secrets,
-            }
-        )
+            })
 
     if as_json:
         click.echo(json.dumps({"channels": rows}, indent=2))
@@ -118,6 +148,8 @@ def cmd_status(as_json: bool) -> None:
     if not rows:
         click.echo("No provisioners registered.")
         return
+
+    real_bots = [r for r in rows if r.get("bot_name")]
     for r in rows:
         flags = []
         if r["live"]:
@@ -128,7 +160,40 @@ def cmd_status(as_json: bool) -> None:
             flags.append("configured")
         else:
             flags.append("not configured")
-        click.echo(f"  {r['channel_type']:10}  {', '.join(flags)}")
+        label = r["channel_type"]
+        if r.get("bot_name"):
+            label = f"{r['channel_type']}/{r['bot_name']}"
+        click.echo(f"  {label:24}  {', '.join(flags)}")
+
+    if not real_bots:
+        click.echo("")
+        click.echo(
+            "No bots configured. Run `haz channel provision slack` to add one."
+        )
+
+
+def _status_row(
+    *,
+    channel_type: str,
+    bot_name: str,
+    required_secrets: list[str],
+    enabled: bool,
+    live: bool,
+) -> dict[str, Any]:
+    """Placeholder row for a platform that has zero configured bots."""
+
+    from hyperagent0.channels.secrets_bridge import AllowlistedSecretsBridge
+
+    reader = AllowlistedSecretsBridge(required_secrets)
+    configured_secrets = {k: bool(reader.read(k)) for k in required_secrets}
+    return {
+        "channel_type": channel_type,
+        "bot_name": bot_name,
+        "enabled": enabled,
+        "configured": False,
+        "live": live,
+        "configured_secrets": configured_secrets,
+    }
 
 
 # ---------------------------------------------------------------------------
