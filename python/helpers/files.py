@@ -539,7 +539,21 @@ def fix_dev_path(path: str):
 
 
 def normalize_a0_path(path: str):
-    "Convert absolute paths into /a0/... paths"
+    """Convert host-absolute paths into ``/a0/...`` paths for Docker mode.
+
+    The ``/a0`` prefix is the in-container mount point of the repo root,
+    used by the upstream Docker image. In host mode (spec 01) there is
+    no ``/a0`` directory and rewriting to it breaks anything that uses
+    the result as a real filesystem path (e.g.
+    ``code_execution_tool.ensure_cwd`` mkdirs ``/a0/usr/workdir`` and
+    gets PermissionError on the host root). So in host mode we leave
+    the path untouched.
+    """
+
+    from python.helpers import runtime
+
+    if not runtime.is_dockerized():
+        return path
     if is_in_base_dir(path):
         deabs = deabsolute_path(path)
         return "/a0/" + deabs

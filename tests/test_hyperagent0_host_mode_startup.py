@@ -70,3 +70,36 @@ def test_is_development_opts_in_via_env(monkeypatch):
     rt = _import_and_reload_runtime()
     rt.initialize()
     assert rt.is_development() is True
+
+
+def test_normalize_a0_path_is_noop_in_host_mode(monkeypatch):
+    """``normalize_a0_path`` must NOT rewrite host paths to ``/a0/...``
+    when the agent is on the host.
+
+    Background: upstream's ``/a0`` is the in-container mount point of
+    the repo root. When the code-execution tool's ``ensure_cwd``
+    feeds the result of ``normalize_a0_path`` to ``os.makedirs``,
+    rewriting host paths produces ``/a0/usr/workdir`` which fails
+    with PermissionError because ``/a0`` doesn't exist on the host.
+    """
+
+    monkeypatch.delenv("DEPLOYMENT_MODE", raising=False)
+    monkeypatch.setattr("sys.argv", ["prog"])
+    monkeypatch.setattr("os.path.exists", lambda p: False)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+
+    try:
+        from python.helpers import files, runtime  # noqa: F401
+        from hyperagent0.runtime import deployment_mode
+
+        importlib.reload(deployment_mode)
+        deployment_mode.resolve_deployment_mode.cache_clear()
+    except ModuleNotFoundError as e:
+        pytest.skip(f"helpers unavailable: {e}")
+
+    base = files.get_base_dir()
+    host_path = os.path.join(base, "usr", "workdir")
+
+    assert files.normalize_a0_path(host_path) == host_path
+    # Paths outside the repo are still passed through unchanged.
+    assert files.normalize_a0_path("/tmp/x") == "/tmp/x"
