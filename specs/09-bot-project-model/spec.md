@@ -1,6 +1,6 @@
 ---
 spec_id: 09-bot-project-model
-status: PARTIAL
+status: SHIPPED
 since: 2026-05-24
 until: null
 epic: channels
@@ -192,12 +192,12 @@ self-filter. No cross-bot leakage.
 - [x] 1.6 `lifecycle.start_enabled_channels` — iterates `load_bot_configs()`, instantiates one adapter per enabled bot, registers each under `(channel_type, bot_name)`. `_channels` map keyed the same way. `running_adapters()` reports bare channel_type for `_legacy` (single-bot) installs so existing status UI keeps working.
 - [x] 1.7 `BaseChannel` — `bot_name: str` attribute populated at construction. Slack/Telegram/Discord adapters propagate it and stamp it on the `InboundMessage`s they build.
 - [x] 1.8 `_default` project bootstrap helper in `hyperagent0/projects.py`. Creates `usr/projects/_default/.a0proj/project.json` if missing. Called from lifecycle.start_enabled_channels at boot.
-- [ ] 1.9 **DEFERRED 2026-05-24** — Collapse the projectless branches:
-  - `python/extensions/system_prompt/_10_system_prompt.py:75` — always resolve project_name or "_default"
-  - `python/tools/code_execution_tool.py:551` — same
-  - `python/helpers/secrets.py:get_secrets_manager` — same
-  - `hyperagent0/sandbox/srt.py:_ensure_profile` — same
-  Bigger than a one-liner per site: each branch carries different alternate-path semantics (template swap, settings.workdir_path fallback, secrets file-append, sandbox write-allow path). True collapse requires upstream `get_project_folder` to honor a `project_folder` override in project.json + per-site behavior tests. Revisit in a follow-up session.
+- [x] 1.9 Collapse the projectless branches:
+  - `python/extensions/system_prompt/_10_system_prompt.get_project_prompt` — always resolves to `_default`; `inactive.md` no longer rendered.
+  - `python/tools/code_execution_tool.ensure_cwd` + `_active_project_dir` — both route through `get_project_work_folder("_default")`.
+  - `python/helpers/secrets.get_secrets_manager` — always appends the resolved project's secrets.env path; missing file → empty merge (behavioral no-op for `_default`).
+  - `hyperagent0/sandbox/srt._build_profile` — `if project_dir:` survives as defensive belt-and-suspenders, but `code_execution_tool` always passes a real path now.
+  Implementation: new `python/helpers/projects.get_project_work_folder(name)` honors a `project_folder` override in `project.json` (work folder only — metadata path stays under `usr/projects/<name>/`). `ensure_default_project(workdir_path=…)` writes that override; lifecycle bootstrap reads `Settings.workdir_path` to seed it. 8 new behavior tests in `tests/test_projectless_branch_collapse.py`.
 - [x] 1.10 First-run nag in `webui/components/settings/channels/channels.html` — show empty-state banner with "Get started" CTA.
 - [x] 1.11 `haz status` hint when no bots configured.
 - [x] 1.12 `channels-store.js` updated to handle list-of-bots shape per platform. Channels UI shows N bot cards per platform. `/channels_status` rewritten to emit one row per `(channel_type, bot_name)` plus a placeholder row per unconfigured platform; live lookup honors both bare `channel_type` (legacy) and `channel_type/bot_name` keys.
@@ -309,3 +309,52 @@ button, and wizard pre-filling `bot_name=bot1` on the next bot.
 
 P1.9 (branch-collapse for projectless / `_default` unification)
 remains deferred — same reasoning as the 2026-05-24 entry.
+
+**2026-05-25 (P1.9 shipped)** — Final spec 09 task landed. Four
+historic projectless branches now collapse to a single `_default`
+resolution path:
+
+* `python/helpers/projects.py` gains `get_project_work_folder(name)`
+  — reads a `project_folder` override from `project.json` if present,
+  else falls back to `get_project_folder(name)`. Metadata path
+  (`.a0proj/`) deliberately stays under `usr/projects/<name>/`
+  regardless of override, so the spec D2 migration doesn't strand
+  the bootstrapped `_default/.a0proj/project.json` we already wrote.
+* `hyperagent0/projects.ensure_default_project(workdir_path=…)` now
+  writes the override under the canonical key `project_folder`
+  (was `workdir_path` — that earlier key was inert; nothing read it).
+  `lifecycle.start_enabled_channels` reads `Settings.workdir_path`
+  and threads it through so the migration fires at first boot of
+  installs that had a custom workdir.
+* The four sites collapse:
+  - `system_prompt.get_project_prompt`: always resolves to a project,
+    always renders `agent.system.projects.active.md` with that
+    project's vars. `inactive.md` is unused by this code path now
+    (kept on disk in case downstream forks read it directly).
+  - `code_execution_tool.ensure_cwd` and `_active_project_dir`: both
+    route through `get_project_work_folder` after `resolve_project_name`.
+  - `secrets.get_secrets_manager`: always appends the per-project
+    secrets.env path. `SecretsManager` swallows read errors on missing
+    files, so `_default`'s absent secrets.env is behaviorally a no-op
+    against the old projectless content. Save paths stay safe — they
+    flow through `get_default_secrets_manager()` which never sees a
+    context.
+  - `srt._build_profile`: callers now always pass a real `project_dir`;
+    the `if project_dir:` branch remains as belt-and-suspenders for
+    direct-callers bypassing `code_execution_tool`.
+* `build_system_prompt_vars` and `get_file_structure` switched to
+  the work folder so the `active.md` "always work inside
+  {{project_path}}" directive picks up the override.
+
+Tests: 8 new in `tests/test_projectless_branch_collapse.py` cover
+the override read, the meta-path stability, the four collapsed
+sites, and the bootstrap key. Full suite: 333 passing / 2 skipped
+(6 orphan failures in withdrawn-spec / websocket tests survive
+from before this work — verified by stash-comparison).
+
+Caveat for future readers: ``agent.system.projects.inactive.md``
+still exists on disk but is no longer referenced by the system
+prompt extension. Left in place because removing prompt files is a
+release-note-worthy change for fork users who may have customized
+it; a future cleanup pass can delete it once the new behavior has
+soaked.

@@ -66,7 +66,12 @@ def test_ensure_default_project_idempotent(tmp_path, monkeypatch):
 
 
 def test_ensure_default_project_records_workdir_path(tmp_path, monkeypatch):
-    """When workdir_path is passed, it lands in project.json."""
+    """When workdir_path is passed, it lands under the project_folder key.
+
+    Per spec 09 D2: ``_default.project_folder = workdir_path`` is the
+    handle that ``get_project_work_folder`` reads to redirect the
+    sandbox/code-exec cwd to the operator's chosen workdir.
+    """
 
     monkeypatch.setattr(
         hp_projects, "_project_root", lambda: tmp_path / "projects"
@@ -74,7 +79,9 @@ def test_ensure_default_project_records_workdir_path(tmp_path, monkeypatch):
 
     pdir = hp_projects.ensure_default_project(workdir_path="/tmp/my-workdir")
     data = json.loads((pdir / ".a0proj" / "project.json").read_text())
-    assert data["workdir_path"] == "/tmp/my-workdir"
+    assert data["project_folder"] == "/tmp/my-workdir"
+    # Old key never present.
+    assert "workdir_path" not in data
 
 
 def test_default_project_has_sensible_defaults(tmp_path, monkeypatch):

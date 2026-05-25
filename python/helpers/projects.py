@@ -72,6 +72,33 @@ def get_project_meta_folder(name: str, *sub_dirs: str):
     return files.get_abs_path(get_project_folder(name), PROJECT_META_DIR, *sub_dirs)
 
 
+def get_project_work_folder(name: str) -> str:
+    """Return the project's *work* folder, honoring a ``project_folder`` override.
+
+    Spec 09 D2: the work folder (sandbox cwd, code-exec cwd, file-tree
+    root) is normally ``usr/projects/<name>/``, but ``project.json`` may
+    set ``project_folder`` to an alternate absolute path. The
+    ``_default`` project uses this to redirect to the operator's
+    legacy ``Settings.workdir_path`` so collapsing the projectless
+    branches doesn't change the agent's cwd on existing installs.
+
+    Metadata (``.a0proj/``) always stays under ``usr/projects/<name>/``
+    — only the work folder is overridable.
+    """
+
+    pj = files.get_abs_path(get_project_folder(name), PROJECT_META_DIR, PROJECT_HEADER_FILE)
+    try:
+        with open(pj, "r", encoding="utf-8") as fh:
+            data = dirty_json.parse(fh.read())
+    except (OSError, ValueError):
+        return get_project_folder(name)
+    if isinstance(data, dict):
+        override = data.get("project_folder")
+        if isinstance(override, str) and override.strip():
+            return override
+    return get_project_folder(name)
+
+
 def delete_project(name: str):
     abs_path = files.get_abs_path(PROJECTS_PARENT_DIR, name)
     files.delete_dir(abs_path)
@@ -382,7 +409,7 @@ def build_system_prompt_vars(name: str):
         "project_name": project_data.get("title", ""),
         "project_description": project_data.get("description", ""),
         "project_instructions": complete_instructions or "",
-        "project_path": files.normalize_a0_path(get_project_folder(name)),
+        "project_path": files.normalize_a0_path(get_project_work_folder(name)),
         "project_git_url": project_data.get("git_url", ""),
     }
 
@@ -496,7 +523,7 @@ def get_knowledge_files_count(name: str):
     return len(files.list_files_in_dir_recursively(knowledge_folder))
 
 def get_file_structure(name: str, basic_data: BasicProjectData|None=None) -> str:
-    project_folder = get_project_folder(name)
+    project_folder = get_project_work_folder(name)
     if basic_data is None:
         basic_data = load_basic_project_data(name)
 

@@ -506,8 +506,9 @@ class SecretsManager:
 
 def get_secrets_manager(context: "AgentContext|None" = None) -> SecretsManager:
     from python.helpers import projects
+    from hyperagent0.projects import resolve_project_name
 
-    # default secrets file
+    # default secrets file (global)
     secret_files = [DEFAULT_SECRETS_FILE]
 
     # use AgentContext from contextvars if no context provided
@@ -515,11 +516,16 @@ def get_secrets_manager(context: "AgentContext|None" = None) -> SecretsManager:
         from agent import AgentContext
         context = AgentContext.current()
 
-    # merged with project secrets if active
+    # Spec 09 P1.9: every context resolves to *some* project — explicit
+    # binding or the implicit ``_default``. Append the per-project
+    # secrets file unconditionally; missing files are read as empty
+    # content by SecretsManager so an absent ``_default/secrets.env``
+    # is a behavioral no-op vs. the old projectless branch.
     if context:
-        project = projects.get_context_project_name(context)
-        if project:
-            secret_files.append(files.get_abs_path(projects.get_project_meta_folder(project), "secrets.env"))
+        project = resolve_project_name(projects.get_context_project_name(context))
+        secret_files.append(
+            files.get_abs_path(projects.get_project_meta_folder(project), "secrets.env")
+        )
 
     return SecretsManager.get_instance(*secret_files)
 

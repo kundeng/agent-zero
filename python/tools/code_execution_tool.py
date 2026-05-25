@@ -247,23 +247,26 @@ class CodeExecution(Tool):
         return await backend.open_shell(cwd=cwd)
 
     def _active_project_dir(self) -> str | None:
-        """Return the active project's folder path, or ``None``.
+        """Return the active project's *work* folder path.
 
-        The active project lives on the AgentContext (``context.set_data``
-        under ``projects.CONTEXT_DATA_KEY_PROJECT``) — set by the channel
-        router when a chat is bound to a project, or by the Web UI when
-        the operator activates one. Same project resolution path the
-        system prompt extension uses.
+        Spec 09 P1.9: resolves to ``_default``'s work folder when no
+        chat-bound project is set, so the sandbox backend always
+        receives a real path. ``_default``'s ``project_folder``
+        override (migrated from ``Settings.workdir_path`` at first
+        boot) means existing installs keep their legacy cwd; new
+        installs default to ``usr/projects/_default/``.
         """
 
+        from hyperagent0.projects import resolve_project_name
+
         try:
-            project_name = projects.get_context_project_name(self.agent.context)
+            project_name = resolve_project_name(
+                projects.get_context_project_name(self.agent.context)
+            )
         except Exception:
             return None
-        if not project_name:
-            return None
         try:
-            return projects.get_project_folder(project_name)
+            return projects.get_project_work_folder(project_name)
         except Exception:
             return None
 
@@ -581,12 +584,17 @@ class CodeExecution(Tool):
         return output
 
     async def ensure_cwd(self) -> str | None:
-        project_name = projects.get_context_project_name(self.agent.context)
-        if project_name:
-            path = projects.get_project_folder(project_name)
-        else:
-            set = settings.get_settings()
-            path = set.get("workdir_path")
+        # Spec 09 P1.9: every code-exec session runs inside *some*
+        # project's work folder. ``_default`` carries the operator's
+        # legacy ``Settings.workdir_path`` under its ``project_folder``
+        # override, so the projectless fallback collapses into the
+        # same lookup the named-project path uses.
+        from hyperagent0.projects import resolve_project_name
+
+        project_name = resolve_project_name(
+            projects.get_context_project_name(self.agent.context)
+        )
+        path = projects.get_project_work_folder(project_name)
 
         if not path:
             return None

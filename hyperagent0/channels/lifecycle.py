@@ -195,7 +195,20 @@ def start_enabled_channels() -> None:
         try:
             from hyperagent0.projects import ensure_default_project
 
-            ensure_default_project()
+            # Migrate Settings.workdir_path → _default.project_folder so
+            # legacy "projectless" code-exec/sandbox cwd is preserved
+            # once the four branch sites collapse onto _default.
+            workdir_path: str | None = None
+            try:
+                from python.helpers import settings as _settings  # type: ignore
+
+                workdir_path = _settings.get_settings().get("workdir_path") or None
+            except Exception:
+                logger.debug(
+                    "could not read Settings.workdir_path for _default bootstrap",
+                    exc_info=True,
+                )
+            ensure_default_project(workdir_path=workdir_path)
         except Exception:
             # Project bootstrap failure must not block channels from coming up
             # — log and proceed; per-chat project activation falls back to

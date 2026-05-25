@@ -127,6 +127,7 @@ Status legend: **SHIPPED** = P1 in-spec features all merged with tests. **PARTIA
 | [06-channel-hardening](specs/06-channel-hardening/spec.md) | SHIPPED | Mention-aware routing, reply-to, SQL migrations (only `on_action` adapter wire-up pending; D5 sandbox-override withdrawn with spec 05) | 04 |
 | [07-install-ux](specs/07-install-ux/spec.md) | SHIPPED | curl\|bash installer, repo path resolver, install user journeys | 01, 03 |
 | [08-channel-provisioning-ux](specs/08-channel-provisioning-ux/spec.md) | PARTIAL | Settings → Channels UI tab + `haz channel` CLI + Slack/Telegram/Discord provisioners (157 tests). **Slack wizard creates orphan apps on non-distributable workspaces — D10 documents the pivot to paste-manifest flow that next session must implement.** Bot verified live in bayeslearner via standalone runtime, not full daemon (`invalid_auth` issue in daemon is unresolved). | 04, 06 |
+| [09-bot-project-model](specs/09-bot-project-model/spec.md) | SHIPPED | Multi-bot per platform, `channels.json` list-shape, ThreadStore `bot_name` key, `_default` implicit project + four-site branch collapse | 04, 06, 08 |
 
 ### Setting up Slack — read the runbook first
 

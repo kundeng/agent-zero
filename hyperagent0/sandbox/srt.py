@@ -45,9 +45,10 @@ Profile contents:
   outside the project tree).
 * ``fs.write.allow`` — only the active project directory. ``cd /tmp``
   works because reads are permissive, but writes outside the project
-  fail. When no project is active the write allowlist is empty
-  (most commands that need to write outside the project tree should
-  be running unsandboxed anyway).
+  fail. Spec 09 P1.9 guarantees the caller always passes a real
+  ``project_dir`` (resolved via ``_default`` for projectless chats);
+  the legacy "empty allowlist" branch survives only as belt-and-suspenders
+  for direct callers of the backend that bypass code_execution_tool.
 * ``network.allow`` — merge of two sources:
   - ``Settings.sandbox_network_default`` (operator-set host-wide list)
   - ``project.json``'s ``network.allow`` (project-specific list)

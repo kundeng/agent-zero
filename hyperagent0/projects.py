@@ -63,12 +63,12 @@ def ensure_default_project(workdir_path: Optional[str] = None) -> Path:
     ``usr/secrets.env`` applies. ``mcp_servers.json`` is NOT created
     so the global MCP config applies (per spec 10 D1).
 
-    Optional ``workdir_path`` is recorded into ``project.json`` so the
-    sandbox / code-execution tool keeps using the operator's chosen
-    working directory rather than the new project folder. Matches
-    spec 09 D2 caveat ("if a user wants the sandbox/code_exec cwd to
-    be the legacy global workdir_path, they set
-    _default.project_folder = workdir_path").
+    Optional ``workdir_path`` is recorded into ``project.json`` under
+    the ``project_folder`` key so the sandbox / code-execution tool
+    keeps using the operator's chosen working directory rather than
+    the new project folder. Matches spec 09 D2 caveat ("if a user
+    wants the sandbox/code_exec cwd to be the legacy global
+    workdir_path, they set _default.project_folder = workdir_path").
 
     Idempotent: safe to call at every daemon start.
     Returns the project directory path.
@@ -101,7 +101,7 @@ def ensure_default_project(workdir_path: Optional[str] = None) -> Path:
         "git_url": "",
     }
     if workdir_path:
-        payload["workdir_path"] = workdir_path
+        payload["project_folder"] = workdir_path
 
     project_json.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return pdir

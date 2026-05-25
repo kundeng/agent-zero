@@ -73,15 +73,21 @@ def get_secrets_prompt(agent: Agent):
 
 
 def get_project_prompt(agent: Agent):
+    # Spec 09 P1.9: every chat lives in *some* project. Projectless
+    # contexts resolve to the implicit ``_default`` project; the active
+    # template renders with that project's title/description/path. The
+    # old ``inactive.md`` branch is gone — `_default`'s sensible
+    # defaults take its place.
+    from hyperagent0.projects import resolve_project_name
+
     result = agent.read_prompt("agent.system.projects.main.md")
-    project_name = agent.context.get_data(projects.CONTEXT_DATA_KEY_PROJECT)
-    if project_name:
-        project_vars = projects.build_system_prompt_vars(project_name)
-        result += "\n\n" + agent.read_prompt(
-            "agent.system.projects.active.md", **project_vars
-        )
-    else:
-        result += "\n\n" + agent.read_prompt("agent.system.projects.inactive.md")
+    project_name = resolve_project_name(
+        agent.context.get_data(projects.CONTEXT_DATA_KEY_PROJECT)
+    )
+    project_vars = projects.build_system_prompt_vars(project_name)
+    result += "\n\n" + agent.read_prompt(
+        "agent.system.projects.active.md", **project_vars
+    )
     return result
 
 def get_skills_prompt(agent: Agent):
