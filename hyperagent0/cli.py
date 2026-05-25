@@ -42,6 +42,8 @@ _SUBCOMMANDS: dict[str, str] = {
     "config": "hyperagent0.cli_commands.config",
     "check": "hyperagent0.cli_commands.check",
     "channel": "hyperagent0.cli_commands.channel",
+    "install-service": "hyperagent0.cli_commands.install_service",
+    "uninstall-service": "hyperagent0.cli_commands.uninstall_service",
     "uninstall": "hyperagent0.cli_commands.uninstall",
 }
 

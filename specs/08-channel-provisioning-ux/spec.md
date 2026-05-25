@@ -356,7 +356,7 @@ For **distributable** apps (Slack App Directory listing or enterprise-internal d
 ### P2.5 — Live-test corrections (next session must do)
 
 - [ ] 2.5.1 Slack wizard: implement D10 path. Detect whether the user wants distributable or single-workspace; on single-workspace, **skip** `apps.manifest.create` and present the manifest JSON as a copy-block with paste-back instructions. Don't create orphan apps.
-- [ ] 2.5.2 Daemon's slack-bolt `invalid_auth` issue: isolate which runtime element (uvicorn, init_a0, mounts) poisons slack-bolt's HTTP path. Standalone works, daemon doesn't, individual imports + thread+loop pattern don't reproduce. Most likely a middleware or signal-handler issue in the uvicorn boot.
+- [x] 2.5.2 Daemon's slack-bolt `invalid_auth` issue. **Resolved 2026-05-25**: no longer reproduces. Verified via full `haz start --port 50080` boot — uvicorn comes up, Bolt app prints "⚡️ Bolt app is running!", Socket Mode session establishes cleanly, no auth error. Most likely incidentally fixed by spec 09's `lifecycle.start_enabled_channels` rewrite (the multi-bot refactor restructured the order in which adapters are instantiated + connected). Diagnostic note: when reproducing daemon Slack issues, re-enable logging AFTER importing `run_ui` — that module sets root logger to WARNING at line 37, silencing INFO logs that hide what's actually happening.
 - [ ] 2.5.3 Provide `haz slack run` standalone-mode command that boots only the channels stack (no UI, no LLM) for cases where the user wants a chat bot without the rest of agent-zero. Equivalent to `/tmp/slack-standalone.py` from the live test, but production-quality.
 
 ### P3 — Nice to Have

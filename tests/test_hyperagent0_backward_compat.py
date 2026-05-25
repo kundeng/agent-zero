@@ -38,9 +38,19 @@ def test_deployment_mode_docker_via_marker(monkeypatch):
     assert deployment_mode.is_docker_mode() is True
 
 
-def test_legacy_ssh_enabled_resolves_to_ssh_mode():
-    cet = pytest.importorskip("python.tools.code_execution_tool")
+def test_legacy_ssh_enabled_resolves_to_ssh_mode(monkeypatch):
+    try:
+        cet = importlib.import_module("python.tools.code_execution_tool")
+    except Exception as e:  # noqa: BLE001 — tty_session reconfigure under pytest
+        pytest.skip(f"code_execution_tool unavailable: {e!r}")
     from types import SimpleNamespace
+
+    # Force Settings.sandbox_mode='' so the legacy branch is the one
+    # the resolver picks (otherwise an operator-set global would win).
+    monkeypatch.setattr(
+        "python.helpers.settings.get_settings",
+        lambda: {"sandbox_mode": ""},
+    )
 
     cfg = SimpleNamespace(
         code_exec_ssh_enabled=True,
@@ -50,22 +60,41 @@ def test_legacy_ssh_enabled_resolves_to_ssh_mode():
     assert cet._resolve_sandbox_mode_with_legacy(cfg) == "ssh"
 
 
-def test_explicit_sandbox_mode_overrides_legacy_flag():
-    """Operators migrating off ssh can pin sandbox_mode='none' even when the
-    stale code_exec_ssh_enabled flag is still True in their config."""
-    cet = pytest.importorskip("python.tools.code_execution_tool")
+def test_explicit_sandbox_mode_overrides_legacy_flag(monkeypatch):
+    """Operators migrating off ssh can pin Settings.sandbox_mode='none'
+    even when the stale code_exec_ssh_enabled flag is still True.
+
+    Spec 05 withdrawn 2026-05-22: previously this test used a per-agent
+    override (``set_agent_sandbox_mode``). After withdrawal, the only
+    knob is the global ``Settings.sandbox_mode``, which `Settings.reset`
+    semantics let the operator override.
+    """
+    try:
+        cet = importlib.import_module("python.tools.code_execution_tool")
+    except Exception as e:  # noqa: BLE001 — tty_session reconfigure under pytest
+        pytest.skip(f"code_execution_tool unavailable: {e!r}")
     from types import SimpleNamespace
 
-    from hyperagent0.projects import set_agent_sandbox_mode
+    monkeypatch.setattr(
+        "python.helpers.settings.get_settings",
+        lambda: {"sandbox_mode": "none"},
+    )
 
     cfg = SimpleNamespace(code_exec_ssh_enabled=True, additional={})
-    set_agent_sandbox_mode(cfg, "none")
     assert cet._resolve_sandbox_mode_with_legacy(cfg) == "none"
 
 
-def test_deprecation_warning_fires_only_once(capsys):
-    cet = pytest.importorskip("python.tools.code_execution_tool")
+def test_deprecation_warning_fires_only_once(capsys, monkeypatch):
+    try:
+        cet = importlib.import_module("python.tools.code_execution_tool")
+    except Exception as e:  # noqa: BLE001 — tty_session reconfigure under pytest
+        pytest.skip(f"code_execution_tool unavailable: {e!r}")
     from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "python.helpers.settings.get_settings",
+        lambda: {"sandbox_mode": ""},
+    )
 
     cfg = SimpleNamespace(code_exec_ssh_enabled=True, additional={})
     cet._legacy_ssh_warning_emitted = False
