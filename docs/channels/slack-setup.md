@@ -288,6 +288,55 @@ Regression test in `tests/test_hyperagent0_channels_slack_hardening.py`.
 - DMs always work as long as the bot has `im:write` + `im:history`
   scopes — try DM'ing the bot directly first as a connectivity test.
 
+## Multiple Slack bots in the same workspace (spec 09)
+
+The wizard supports more than one Slack bot per install. Each bot has
+its own app in Slack (separate `apps.manifest.create` paste, separate
+xoxb-/xapp- tokens, separate display name) and lives as its own block
+under the `slack` array in `~/.hyperagent0/channels.json`:
+
+```jsonc
+{
+  "slack": [
+    { "name": "hazbot",   "token": "$$secret(SLACK_BOT_TOKEN_HAZBOT)",  "app_token": "$$secret(SLACK_APP_TOKEN_HAZBOT)",  "default_project": "engineering" },
+    { "name": "support",  "token": "$$secret(SLACK_BOT_TOKEN_SUPPORT)", "app_token": "$$secret(SLACK_APP_TOKEN_SUPPORT)", "default_project": "customer-ops" }
+  ]
+}
+```
+
+Key facts:
+
+- **`name` is the local identifier.** Used in logs, secret keys, and
+  the Channels UI card title (`Slack — hazbot`). Not the bot's Slack
+  display name (that's set in the manifest).
+- **Per-bot secret suffix.** Bot `hazbot` writes its tokens as
+  `SLACK_BOT_TOKEN_HAZBOT` / `SLACK_APP_TOKEN_HAZBOT`. The bare keys
+  (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`) are reserved for the legacy
+  single-bot install (bot name `_legacy` or `default` or empty).
+- **Each bot gets its own Socket Mode session.** No cross-bot
+  leakage; both can be @-mentioned in the same channel without
+  routing collisions because `(channel_type, bot_name, chat_id)` is
+  the ThreadStore key.
+- **Wizard usage:** on the Channels tab, click "+ Add another slack
+  bot" — the wizard's first step pre-fills a unique `bot_name`
+  (`bot1`, `bot2`, …) you can override. Run the paste-manifest flow
+  separately for each bot (separate Slack app, separate xoxb-/xapp-
+  tokens).
+- **CLI status:** `haz channel status` prints one row per
+  `(channel_type, bot_name)`. Example output:
+  ```
+  slack/hazbot   live    (default_project=engineering)
+  slack/support  live    (default_project=customer-ops)
+  telegram       not configured
+  discord        not configured
+  ```
+
+When in doubt, an unset `bot_name` (or the literal `default`) routes
+through the legacy single-bot keys for back-compat. Don't migrate an
+existing single-bot install to suffixed keys until you actually want
+a second bot — the strangler-fig contract relies on those legacy
+names staying bare.
+
 ## How we figured this out
 
 See `specs/08-channel-provisioning-ux/spec.md` decision D10 and the

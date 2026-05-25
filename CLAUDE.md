@@ -126,8 +126,8 @@ Status legend: **SHIPPED** = P1 in-spec features all merged with tests. **PARTIA
 | [05-project-isolation](specs/05-project-isolation/spec.md) | WITHDRAWN | Scrapped 2026-05-22 — sandbox mode is a single global setting; no per-project override, no cgroup/docker/podman backends | 01 |
 | [06-channel-hardening](specs/06-channel-hardening/spec.md) | SHIPPED | Mention-aware routing, reply-to, SQL migrations (only `on_action` adapter wire-up pending; D5 sandbox-override withdrawn with spec 05) | 04 |
 | [07-install-ux](specs/07-install-ux/spec.md) | SHIPPED | curl\|bash installer, repo path resolver, install user journeys | 01, 03 |
-| [08-channel-provisioning-ux](specs/08-channel-provisioning-ux/spec.md) | PARTIAL | Settings → Channels UI tab + `haz channel` CLI + Slack/Telegram/Discord provisioners (157 tests). **Slack wizard creates orphan apps on non-distributable workspaces — D10 documents the pivot to paste-manifest flow that next session must implement.** Bot verified live in bayeslearner via standalone runtime, not full daemon (`invalid_auth` issue in daemon is unresolved). | 04, 06 |
-| [09-bot-project-model](specs/09-bot-project-model/spec.md) | PARTIAL | Multi-bot per platform + `_default` collapse all merged (P1.1–P1.14 + P1.9). **P2 integration tests not written; inherits spec 08's daemon `invalid_auth` blocker so multi-bot is unproven inside `haz start`.** | 04, 06, 08 |
+| [08-channel-provisioning-ux](specs/08-channel-provisioning-ux/spec.md) | SHIPPED | Settings → Channels UI tab + `haz channel` CLI + Slack/Telegram/Discord provisioners. D10 paste-manifest flow shipped (no more orphan apps); daemon Slack `invalid_auth` resolved 2026-05-25 by spec 09 lifecycle refactor. | 04, 06 |
+| [09-bot-project-model](specs/09-bot-project-model/spec.md) | SHIPPED | Multi-bot per platform, ThreadStore `bot_name` key, `_default` implicit project + four-site branch collapse. P1 + P2 done; integration test proven via `tests/test_lifecycle_multibot.py` + daemon `invalid_auth` resolved 2026-05-25 | 04, 06, 08 |
 
 ### Setting up Slack — read the runbook first
 

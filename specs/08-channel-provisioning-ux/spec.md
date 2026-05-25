@@ -1,6 +1,6 @@
 ---
 spec_id: 08-channel-provisioning-ux
-status: DRAFT
+status: SHIPPED
 since: 2026-05-22
 until: null
 epic: channels
@@ -173,13 +173,15 @@ The Flask handlers maintain a small in-memory `session_id → session_dict` cach
 
 ### D6: Secrets storage — provisioners declare their key names
 
-**Choice**: Each provisioner exposes `required_secrets: list[str]`. The Slack provisioner declares `[SLACK_APP_ID, SLACK_SIGNING_SECRET, SLACK_CLIENT_ID, SLACK_CLIENT_SECRET, SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_TEAM_ID]`. Telegram declares `[TELEGRAM_BOT_TOKEN]`. Discord declares `[DISCORD_BOT_TOKEN]`.
+**Choice**: Each provisioner exposes `required_secrets: list[str]` of *bare* key names: Slack declares `[SLACK_APP_ID, SLACK_SIGNING_SECRET, SLACK_CLIENT_ID, SLACK_CLIENT_SECRET, SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_TEAM_ID]`. Telegram declares `[TELEGRAM_BOT_TOKEN]`. Discord declares `[DISCORD_BOT_TOKEN]`.
 
 The `SecretsBridge` in `ProvisionContext` writes only into the declared set — anything else is a programming error and raises. All writes go through `SecretsManager.save_secrets_with_merge` (single atomic write per provisioner step).
 
 `channels.json`'s per-platform block carries only `$$secret(NAME)` placeholders for the token-shaped keys, plus non-secret fields (`enabled`, `require_mention`, `project_binding`, `allowed_users`, `allowed_chats`).
 
-**Why**: Matches the existing `ChannelConfig` placeholder convention. Operators have one consistent place to rotate keys. Per-platform `required_secrets` lists let `haz channel show` print "what tokens does this platform need?" without hardcoding.
+**Per-bot suffix convention (spec 09 P1.14, refines D6)**: When a provisioner runs with a non-empty / non-legacy `ctx.bot_name`, secrets land under `KEY_<BOTNAME>` (uppercase, dashes → underscores). E.g. bot `hazbot` writes `SLACK_BOT_TOKEN_HAZBOT`. The `LEGACY_BOT_NAMES = {"_legacy", "default", ""}` set keeps the bare-key form for back-compat — old single-bot installs never rewrite their existing `SLACK_BOT_TOKEN`. The helper is `hyperagent0.channels.config.secret_key_for_bot(bot_name, key)`; all three provisioners route their writes and `$$secret(...)` placeholder rendering through it.
+
+**Why**: Matches the existing `ChannelConfig` placeholder convention. Operators have one consistent place to rotate keys. Per-platform `required_secrets` lists let `haz channel show` print "what tokens does this platform need?" without hardcoding. The per-bot suffix lets two bots on the same platform have independent secret stores without colliding.
 
 ### D7: Channel ↔ project binding gets a UI but no schema change
 
