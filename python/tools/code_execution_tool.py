@@ -209,8 +209,18 @@ class CodeExecution(Tool):
         For ``sandbox_mode == "ssh"`` we still need the upstream rfc_exchange
         root-password handshake when no password is configured, so we resolve
         the connection params here and pass them to the SshBackend.
+
+        Spec 10 gap-fix: pass the active project's folder to the backend so
+        per-project sandbox profiles (srt) and policy-derived configuration
+        (network allowlist) are scoped to the chat that ran the code.
         """
         from hyperagent0.sandbox import get_backend
+
+        # Resolve the active project (per AgentContext) to its on-disk
+        # folder. Returns None when the context has no project bound —
+        # the backend keeps today's default behavior in that case (shared
+        # default profile).
+        project_dir = self._active_project_dir()
 
         if sandbox_mode == "ssh":
             cfg = self.agent.config
@@ -222,18 +232,40 @@ class CodeExecution(Tool):
             from hyperagent0.sandbox.ssh import SshBackend
 
             backend = SshBackend(
+                project_dir=project_dir,
                 connection={
                     "logger": self.agent.context.log,
                     "hostname": cfg.code_exec_ssh_addr,
                     "port": cfg.code_exec_ssh_port,
                     "username": cfg.code_exec_ssh_user,
                     "password": pswd,
-                }
+                },
             )
             return await backend.open_shell(cwd=cwd)
 
-        backend = get_backend(sandbox_mode)
+        backend = get_backend(sandbox_mode, project_dir=project_dir)
         return await backend.open_shell(cwd=cwd)
+
+    def _active_project_dir(self) -> str | None:
+        """Return the active project's folder path, or ``None``.
+
+        The active project lives on the AgentContext (``context.set_data``
+        under ``projects.CONTEXT_DATA_KEY_PROJECT``) — set by the channel
+        router when a chat is bound to a project, or by the Web UI when
+        the operator activates one. Same project resolution path the
+        system prompt extension uses.
+        """
+
+        try:
+            project_name = projects.get_context_project_name(self.agent.context)
+        except Exception:
+            return None
+        if not project_name:
+            return None
+        try:
+            return projects.get_project_folder(project_name)
+        except Exception:
+            return None
 
     async def execute_python_code(self, session: int, code: str, reset: bool = False):
         escaped_code = shlex.quote(code)

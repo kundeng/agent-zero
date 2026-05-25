@@ -133,6 +133,10 @@ class Settings(TypedDict):
     shell_interface: Literal['local','ssh']
     # spec 01-host-first D2: process-relationship taxonomy for code execution.
     sandbox_mode: Literal['none', 'sandbox', 'ssh']
+    # spec 10 (gap-fix): operator-wide network allowlist baked into every
+    # project's srt sandbox profile. Project-specific allow entries
+    # (project.json -> network.allow) are merged on top.
+    sandbox_network_default: list[str]
     websocket_server_restart_enabled: bool
     uvicorn_access_logs_enabled: bool
 
@@ -613,6 +617,14 @@ def get_default_settings() -> Settings:
             # container can opt in via 'ssh' or via the legacy
             # code_exec_ssh_enabled flag (auto-migrated in task 1.5).
             "none",
+        ),
+        sandbox_network_default=get_default_value(
+            "sandbox_network_default",
+            # Spec 10 gap-fix: empty by default. Operators add hosts here
+            # that every project needs reachable (e.g. local proxy LLM,
+            # internal package mirrors). Projects extend via their own
+            # project.json network.allow.
+            [],
         ),
         websocket_server_restart_enabled=get_default_value("websocket_server_restart_enabled", True),
         uvicorn_access_logs_enabled=get_default_value("uvicorn_access_logs_enabled", False),
