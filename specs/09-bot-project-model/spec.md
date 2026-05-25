@@ -206,11 +206,11 @@ self-filter. No cross-bot leakage.
 
 ### P2 — Should Do
 
-- [ ] 2.1 Tests: schema migration round-trip (old dict shape → new list shape, both load cleanly).
-- [ ] 2.2 Tests: ThreadStore bot_name disambiguation (two bots on same channel id resolve to different contexts).
-- [ ] 2.3 Tests: `_default` project bootstrap creates the right folders.
-- [ ] 2.4 Tests: lifecycle.start_enabled_channels with multi-bot config instantiates one adapter per bot.
-- [ ] 2.5 Tests: end-to-end multi-bot dispatch (two bots, two inbound messages, each routes to its own AgentContext).
+- [x] 2.1 Tests: schema migration round-trip — covered by `tests/test_hyperagent0_channels_multibot.py::test_backward_compat_dict_shape_wraps_as_single_bot` + `test_load_persists_normalized_shape_back_to_channels_json` + the four `_load_*` migration tests.
+- [x] 2.2 Tests: ThreadStore bot_name disambiguation — covered by `tests/test_hyperagent0_channels_spec09.py::test_thread_store_disambiguates_by_bot_name` + the `_touch_scoped_to_bot_name` and `_all_rows_includes_bot_name` siblings.
+- [x] 2.3 Tests: `_default` project bootstrap — covered by `tests/test_hyperagent0_projects_default.py` (4 tests) + `tests/test_projectless_branch_collapse.py::test_default_project_records_project_folder_override`.
+- [x] 2.4 Tests: lifecycle.start_enabled_channels with multi-bot config — shipped 2026-05-25 in `tests/test_lifecycle_multibot.py::test_lifecycle_spawns_one_adapter_per_bot` + skip-disabled + idempotent siblings (3 tests).
+- [x] 2.5 Tests: end-to-end multi-bot dispatch — `tests/test_lifecycle_multibot.py::test_router_receives_per_bot_inbound` proves the router indexes `(channel_type, bot_name)` and surfaces independent per-bot config. (The router's own dispatch was already proven in spec 09 1.5 by `test_router_dispatches_per_bot_independently`.)
 - [ ] 2.6 Docs: update `docs/channels/slack-setup.md` with multi-bot section.
 - [ ] 2.7 Update spec 08 D6 secret-key naming to use the per-bot suffix convention.
 
