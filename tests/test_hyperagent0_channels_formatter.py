@@ -92,7 +92,7 @@ def test_telegram_empty_input_returns_one_empty_chunk():
 # ---------------------------------------------------------------------------
 
 
-def test_slack_placeholder_shape():
+def test_slack_plain_text_passes_through():
     payload = format_for_channel("hello slack", "slack")
     assert isinstance(payload, dict)
     assert payload["text"] == "hello slack"
@@ -101,6 +101,131 @@ def test_slack_placeholder_shape():
     assert block["type"] == "section"
     assert block["text"]["type"] == "mrkdwn"
     assert block["text"]["text"] == "hello slack"
+
+
+def test_slack_bold_double_asterisk_collapses_to_single():
+    """Markdown ``**bold**`` must become mrkdwn ``*bold*`` (single asterisk)."""
+
+    text = "Hello **world**, this is **bold**."
+    payload = format_for_channel(text, "slack")
+    assert "*world*" in payload["text"]
+    assert "*bold*" in payload["text"]
+    assert "**" not in payload["text"]
+
+
+def test_slack_italic_single_asterisk_becomes_underscore():
+    """Markdown ``*italic*`` must become mrkdwn ``_italic_``."""
+
+    text = "an *italic* word"
+    payload = format_for_channel(text, "slack")
+    assert "_italic_" in payload["text"]
+    # No bare asterisks left (would render literally in Slack).
+    assert "*italic*" not in payload["text"]
+
+
+def test_slack_bold_before_italic_does_not_fragment():
+    """``**foo**`` must NOT get caught by the italic pass mid-conversion."""
+
+    text = "**both** and *one*"
+    payload = format_for_channel(text, "slack")
+    assert "*both*" in payload["text"]
+    assert "_one_" in payload["text"]
+
+
+def test_slack_headings_become_bold():
+    """``# Heading`` (any level) becomes ``*Heading*`` since Slack has no headings.
+
+    Inline emphasis inside a heading is stripped — mrkdwn can't render
+    nested bold and ``*outer *inner**`` would look broken.
+    """
+
+    text = "# H1\n## H2 with **strong**\n### H3"
+    payload = format_for_channel(text, "slack")
+    out = payload["text"]
+    assert "*H1*" in out
+    assert "*H2 with strong*" in out  # ** stripped from inside the heading
+    assert "*H3*" in out
+    # No literal '##' should leak through.
+    assert "##" not in out
+
+
+def test_slack_table_becomes_code_block():
+    """Markdown tables render as literal ``|`` text in mrkdwn — wrap in a code block."""
+
+    text = (
+        "Here's a table:\n\n"
+        "| Property | Value |\n"
+        "|----------|-------|\n"
+        "| Name | Agent Zero |\n"
+        "| Model | sonnet-4-6 |\n"
+        "\nAfter the table."
+    )
+    payload = format_for_channel(text, "slack")
+    out = payload["text"]
+    # Code-fenced
+    assert "```" in out
+    # Header + rows survive inside the code block (pipe-aligned).
+    assert "Property | Value" in out
+    assert "Name | Agent Zero" in out
+    assert "Model | sonnet-4-6" in out
+    # Separator row stripped
+    assert "----------|-------" not in out
+    # Surrounding prose preserved
+    assert "Here's a table" in out
+    assert "After the table." in out
+
+
+def test_slack_code_fence_content_not_translated():
+    """Markdown inside a fenced code block must NOT be touched."""
+
+    text = "Look:\n```\n**this stays as-is**\n## not a heading\n```\nDone."
+    payload = format_for_channel(text, "slack")
+    out = payload["text"]
+    # Inside the code block, the markup is preserved literally.
+    assert "**this stays as-is**" in out
+    assert "## not a heading" in out
+
+
+def test_slack_empty_input():
+    payload = format_for_channel("", "slack")
+    assert payload["text"] == ""
+    assert payload["blocks"][0]["text"]["text"] == ""
+
+
+def test_slack_emoji_underscores_preserved_in_heading():
+    """``## :file_folder: Title`` must NOT strip the underscores from the
+    emoji shortcode — Slack needs them to render the emoji."""
+
+    payload = format_for_channel("## :file_folder: Current Project", "slack")
+    assert "*:file_folder: Current Project*" in payload["text"]
+
+
+def test_slack_italic_inside_heading_preserved():
+    """``*outer _italic_*`` IS legal mrkdwn (bold containing italic).
+    The heading body's ``_`` markers must survive."""
+
+    payload = format_for_channel("## Heading with _slant_", "slack")
+    assert "*Heading with _slant_*" in payload["text"]
+
+
+def test_slack_table_strips_bold_markers_in_cells():
+    """Inside the code-block fallback for tables, ``**bold**`` cell
+    content shouldn't show literal asterisks (code blocks render
+    everything as monospaced text — emphasis markup is noise)."""
+
+    text = (
+        "| Property | Value |\n"
+        "|---|---|\n"
+        "| **Name** | Agent Zero |\n"
+        "| **Path** | snake_case_keeps |"
+    )
+    payload = format_for_channel(text, "slack")
+    out = payload["text"]
+    assert "Name | Agent Zero" in out
+    # ** stripped:
+    assert "**Name**" not in out
+    # internal underscores in identifier-like text preserved:
+    assert "snake_case_keeps" in out
 
 
 # ---------------------------------------------------------------------------

@@ -134,22 +134,165 @@ def _format_telegram(text: str) -> list[str]:
 
 
 def _format_slack(text: str) -> dict[str, Any]:
-    """P1 placeholder: a single ``section`` block with mrkdwn text.
+    """Translate GitHub-flavored markdown to Slack mrkdwn.
 
-    The P2 Slack adapter will expand this to honor code blocks and
-    headings via richer Block Kit primitives.
+    Slack's mrkdwn supports a small, opinionated subset:
+
+    * ``*bold*`` (single asterisk, NOT ``**double**``)
+    * ``_italic_`` (underscore, NOT ``*single*``)
+    * ``~strike~``, ```` `code` ```` , triple-backtick code fences
+    * Bulleted / numbered lists are passed through as plain text
+    * No native headings, no native tables
+
+    So the translator:
+
+    1. Stashes fenced code blocks behind sentinels so their contents
+       aren't touched.
+    2. Detects markdown tables (``| col | col |`` with a ``|---|---|``
+       separator row) and rewrites them as a fenced code block so they
+       render monospaced and column-aligned in Slack.
+    3. Converts ``# Heading`` (any level) to a ``*Heading*`` line.
+    4. Converts ``**bold**`` → ``*bold*`` BEFORE single-asterisk italic
+       so ``**`` doesn't fragment into ``*<italic>*``.
+    5. Converts remaining ``*italic*`` → ``_italic_``.
+    6. Restores the stashed code blocks.
+
+    The result is wrapped in a Block Kit ``section`` with type
+    ``mrkdwn``. Slack's 3000-char per-section cap could be exceeded by
+    long agent replies, but that's an edge case we'll handle when it
+    bites.
     """
 
-    safe = text or ""
+    if not text:
+        return {"text": "", "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": ""}}]}
+
+    # Step 1: stash code fences so their contents (which may contain
+    # ``**`` / ``*`` / ``|`` chars) survive the substitution passes.
+    code_stash: list[str] = []
+
+    def _stash_code(match: re.Match[str]) -> str:
+        lang = match.group(1) or ""
+        body = match.group(2)
+        # Slack mrkdwn doesn't render language hints; just preserve the
+        # body inside triple backticks.
+        block = f"```{body}```" if not lang else f"```\n{body}\n```"
+        code_stash.append(block)
+        return f"\x00SLACKCODE{len(code_stash) - 1}\x00"
+
+    working = _FENCED_CODE_RE.sub(_stash_code, text)
+
+    # Step 2: convert markdown tables to code-block tables.
+    working = _slack_tables_to_codeblocks(working, code_stash)
+
+    # Step 3: italic FIRST (``*x*`` → ``_x_``). The italic regex uses
+    # negative lookaround so ``**bold**`` is skipped. Doing italic
+    # before bold prevents bold's resulting single-asterisk pair from
+    # being misread as italic in step 4.
+    working = _ITALIC_RE.sub(lambda m: f"_{m.group(1)}_", working)
+
+    # Step 4: bold (``**x**`` → ``*x*``).
+    working = _BOLD_RE.sub(lambda m: f"*{m.group(1)}*", working)
+
+    # Step 5: headings → ``*bold*`` lines. Slack mrkdwn can't render
+    # nested bold, so inner ``*`` markers inside a heading get stripped
+    # (otherwise we'd emit ``*outer *inner**`` which renders broken).
+    # Underscores are NOT stripped — Slack emoji shortcodes like
+    # ``:file_folder:`` use underscores legitimately, and italic-inside-
+    # bold (``*outer _italic_*``) is mrkdwn-legal.
+    def _heading_to_bold(m: re.Match[str]) -> str:
+        body = m.group(2).strip().replace("*", "")
+        return f"*{body}*"
+
+    working = _HEADING_RE.sub(_heading_to_bold, working)
+
+    # Step 6: restore stashed code blocks.
+    def _restore(match: re.Match[str]) -> str:
+        idx = int(match.group(1))
+        return code_stash[idx]
+
+    final = re.sub(r"\x00SLACKCODE(\d+)\x00", _restore, working)
+
     return {
-        "text": safe,
+        "text": final,
         "blocks": [
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": safe},
+                "text": {"type": "mrkdwn", "text": final},
             }
         ],
     }
+
+
+# Markdown table = at least 2 lines:
+#   | h1 | h2 |
+#   |----|----|
+#   | r1 | r2 |
+# Detect by requiring a separator row.
+_TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
+
+
+def _slack_tables_to_codeblocks(text: str, code_stash: list[str]) -> str:
+    """Find markdown tables and replace each with a fenced code block.
+
+    The code block contains the original row text (pipes and all), so
+    columns align visually in monospace. The new block is stashed into
+    ``code_stash`` immediately so subsequent inline-marker passes don't
+    rewrite its contents.
+    """
+
+    lines = text.split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        # A table candidate is a header row (contains '|') followed by
+        # a separator row of dashes-and-pipes.
+        if "|" in lines[i] and i + 1 < len(lines) and _TABLE_SEP_RE.match(lines[i + 1]):
+            header = lines[i]
+            j = i + 2
+            rows: list[str] = []
+            while j < len(lines) and "|" in lines[j] and lines[j].strip():
+                rows.append(lines[j])
+                j += 1
+            # Build the code block. Strip a single leading/trailing pipe
+            # and surrounding whitespace from each cell for cleaner display.
+            table_lines = [header] + rows
+            normalized = "\n".join(_normalize_table_row(r) for r in table_lines)
+            code_stash.append(f"```\n{normalized}\n```")
+            out.append(f"\x00SLACKCODE{len(code_stash) - 1}\x00")
+            i = j
+        else:
+            out.append(lines[i])
+            i += 1
+    return "\n".join(out)
+
+
+def _normalize_table_row(row: str) -> str:
+    """Trim ``| a | b |`` → ``a | b`` with consistent spacing.
+
+    Strips markdown emphasis markers (``**`` and lone ``*``) from each
+    cell — they don't render inside Slack code blocks, so leaving them
+    in would just print literal asterisks.
+    """
+
+    cells = [c.strip() for c in row.split("|")]
+    # Split produces empty strings for leading/trailing pipes; drop them.
+    cells = [c for c in cells if c != ""] or [""]
+    cells = [_strip_inline_emphasis(c) for c in cells]
+    return " | ".join(cells)
+
+
+_EMPH_STRIP_RE = re.compile(r"\*+|(?<![A-Za-z0-9_])_+|_+(?![A-Za-z0-9_])")
+
+
+def _strip_inline_emphasis(s: str) -> str:
+    """Remove ``*`` markers and standalone ``_`` markers from a cell.
+
+    ``_`` only inside word characters (e.g. ``snake_case``) is left
+    alone; ``_italic_`` markers around a word are stripped. ``*`` is
+    always stripped since it never has a non-emphasis use inline.
+    """
+
+    return _EMPH_STRIP_RE.sub("", s)
 
 
 # ---------------------------------------------------------------------------
