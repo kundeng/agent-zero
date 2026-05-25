@@ -1,14 +1,33 @@
-"""Claude Agent SDK chat wrapper (spec 02 task 1.3).
+"""ClaudeSDKWrapper — Claude provider via local CLI auth (spec 02 D1 reframed).
 
-Mirrors the public interface of ``models.LiteLLMChatWrapper`` so the agent
-monologue loop can swap providers transparently:
+Per project memory 2026-05-22 ("spec 02 SDK-only via local creds"), this
+wrapper uses the official ``claude-agent-sdk`` package which spawns the
+``claude`` CLI as a subprocess and delegates authentication to the CLI's
+existing login (Pro / Max subscription). **No ``ANTHROPIC_API_KEY`` is
+required** — this is the whole point: a user with a Claude subscription
+can run the agent without paying per-token API rates.
 
-    - ``unified_call(...)``  — primary entrypoint used by ``Agent.call_chat_model``.
-    - ``_astream``           — async streaming generator.
-    - ``model_name`` / ``provider`` properties.
+Two distinct Anthropic Python SDKs share similar names; only one belongs
+here:
 
-``anthropic`` is imported **lazily** inside ``__init__`` so the base wheel can
-install and ``haz --help`` can run without the ``[claude-sdk]`` extra.
+* ``anthropic`` (API-key path) — what an earlier draft of this file used.
+  Removed because it requires a metered API key.
+* ``claude-agent-sdk`` (CLI subprocess) — what we use now. Delegates auth
+  to the locally-installed ``claude`` CLI.
+
+Selection: ``chat_model_provider == "claude-sdk"`` in settings dispatches
+through ``models.get_chat_model`` → here.
+
+Settings hooks (read by ``models.get_chat_model`` if not overridden):
+
+    claude_sdk_model           default ``claude-sonnet-4-5``
+    claude_sdk_cli_path        optional explicit ``claude`` binary path
+    claude_sdk_thinking_budget extended thinking tokens; 0 disables
+    claude_sdk_max_turns       agentic depth; ``1`` = pure completion
+
+Public surface mirrors ``LiteLLMChatWrapper``: the agent monologue loop only
+calls ``unified_call``; ``_astream`` is the streaming variant some Tools use.
+``anthropic`` is **never** imported from this module.
 """
 
 from __future__ import annotations
@@ -17,19 +36,17 @@ from typing import Any, AsyncIterator, Awaitable, Callable, List, Optional, Tupl
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from .bridge import extract_response_blocks
 
-
-# Default model — also exposed via settings.claude_sdk_model.
 _DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-5"
 
 
 class ClaudeSDKWrapper:
     """Drop-in replacement for ``LiteLLMChatWrapper`` when provider=claude-sdk.
 
-    The wrapper intentionally does not subclass ``SimpleChatModel`` — Agent Zero
-    only calls ``unified_call`` and the streaming helpers, and avoiding the
-    LangChain base keeps the ``anthropic`` dependency surface clean.
+    Uses ``claude_agent_sdk.query()`` which runs the ``claude`` CLI as a
+    subprocess and yields typed messages (``AssistantMessage`` /
+    ``ResultMessage`` / etc.). Auth flows through whatever account the CLI
+    is logged into — typically the user's Pro / Max subscription.
     """
 
     provider: str = "claude-sdk"
@@ -41,62 +58,72 @@ class ClaudeSDKWrapper:
         model_config: Optional[Any] = None,
         **kwargs: Any,
     ):
-        # Lazy import: keep `anthropic` out of the base install path.
+        # Lazy import keeps ``haz --help`` and the base wheel free of the
+        # [claude-sdk] extra. Failure here surfaces as a clear install hint
+        # at provider-selection time, not at module-load time.
         try:
-            import anthropic  # type: ignore
+            import claude_agent_sdk  # type: ignore
         except ImportError as e:  # pragma: no cover - import-time signal only
             raise ImportError(
-                "Claude SDK provider selected but the `anthropic` package is not "
-                "installed. Install the optional extra: `pip install hyperagent0[claude-sdk]`."
+                "chat_model_provider=claude-sdk requires the optional extra. "
+                "Install: pip install hyperagent0[claude-sdk] "
+                "(or directly: pip install claude-agent-sdk)."
             ) from e
 
-        self._anthropic = anthropic
+        self._sdk = claude_agent_sdk
         self.model_name = model or _DEFAULT_CLAUDE_MODEL
         self.provider = provider or "claude-sdk"
-        # Strip Agent-Zero-only kwargs that the Anthropic SDK does not know about.
         self.kwargs = dict(kwargs)
-        api_key = self.kwargs.pop("api_key", None) or None
+
+        # API key not consumed — claude_agent_sdk auths through the CLI.
+        # We accept and discard it so a settings page that still carries
+        # the key doesn't blow up.
+        self.kwargs.pop("api_key", None)
+
+        self.cli_path: Optional[str] = self.kwargs.pop("cli_path", None) or None
         self.thinking_budget = int(self.kwargs.pop("thinking_budget", 0) or 0)
+        # max_turns=1 keeps the SDK in pure-completion mode. Agent Zero's
+        # monologue loop is what drives the multi-turn behavior; letting the
+        # SDK also iterate would double-loop.
+        self.max_turns = int(self.kwargs.pop("max_turns", 1) or 1)
         self.a0_model_conf = model_config
 
-        # AsyncAnthropic transparently supports streaming.
-        self._client = anthropic.AsyncAnthropic(api_key=api_key) if api_key else anthropic.AsyncAnthropic()
+    @property
+    def _llm_type(self) -> str:
+        return "claude-sdk-cli"
 
     # ------------------------------------------------------------------
-    # Message-format mapping
+    # Message conversion
     # ------------------------------------------------------------------
 
     def _convert_messages(
         self, messages: List[BaseMessage]
-    ) -> tuple[str, list[dict[str, Any]]]:
-        """LangChain messages -> (system_text, anthropic_messages).
+    ) -> tuple[str, str]:
+        """Flatten LangChain messages into (system_prompt, user_prompt).
 
-        Claude's Messages API takes ``system`` as a top-level argument and a
-        ``messages`` list with only user/assistant turns.
+        ``claude_agent_sdk.query()`` takes a single ``prompt`` string plus
+        an optional ``system_prompt`` in options. We concatenate all
+        non-system turns into the user prompt — Agent Zero's monologue
+        loop typically calls us with one system + one user message, so
+        the flattening is a no-op in the common case.
         """
         system_chunks: list[str] = []
-        anthropic_messages: list[dict[str, Any]] = []
-        role_map = {"human": "user", "ai": "assistant", "system": "system", "tool": "user"}
-
+        user_chunks: list[str] = []
         for m in messages:
-            role = role_map.get(m.type, m.type)
             content = m.content if isinstance(m.content, str) else str(m.content)
-            if role == "system":
+            if m.type == "system":
                 if content:
                     system_chunks.append(content)
                 continue
-            if role == "tool":
-                # Tool result is just user content for Claude when we are running
-                # the text-mode loop. (Native tool_use_id round-tripping happens
-                # only when the higher-level loop uses the Claude tool_use path.)
-                anthropic_messages.append({"role": "user", "content": content})
-                continue
-            anthropic_messages.append({"role": role, "content": content})
-
-        return "\n\n".join(system_chunks), anthropic_messages
+            # human / ai / tool — flatten to the prompt side. The CLI sees
+            # one consolidated turn; thinking/tool semantics handled by the
+            # outer Agent loop.
+            if content:
+                user_chunks.append(content)
+        return "\n\n".join(system_chunks), "\n\n".join(user_chunks)
 
     # ------------------------------------------------------------------
-    # unified_call — same signature as LiteLLMChatWrapper.unified_call
+    # unified_call — primary entrypoint used by Agent.call_chat_model
     # ------------------------------------------------------------------
 
     async def unified_call(
@@ -119,69 +146,32 @@ class ClaudeSDKWrapper:
         if user_message:
             msgs.append(HumanMessage(content=user_message))
 
-        system_text, anthropic_messages = self._convert_messages(msgs)
+        system_text, user_text = self._convert_messages(msgs)
 
-        call_kwargs: dict[str, Any] = {**self.kwargs, **kwargs}
-        # Drop A0-only retry params that the Anthropic SDK does not accept.
-        call_kwargs.pop("a0_retry_attempts", None)
-        call_kwargs.pop("a0_retry_delay_seconds", None)
-
-        max_tokens = int(call_kwargs.pop("max_tokens", 4096))
-
-        # Extended thinking — enabled per-call when budget > 0.
-        thinking_budget = int(call_kwargs.pop("thinking_budget", self.thinking_budget))
-        if thinking_budget > 0:
-            call_kwargs["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": thinking_budget,
-            }
-
-        stream = (
-            reasoning_callback is not None
-            or response_callback is not None
-            or tokens_callback is not None
-        )
-
-        request_kwargs: dict[str, Any] = {
-            "model": self.model_name,
-            "max_tokens": max_tokens,
-            "messages": anthropic_messages,
-        }
-        if system_text:
-            request_kwargs["system"] = system_text
-        request_kwargs.update(call_kwargs)
+        options = self._build_options(system_text=system_text)
 
         response_text = ""
         reasoning_text = ""
 
-        if stream:
-            # AsyncAnthropic.messages.stream() yields typed events with a
-            # final accumulated message available via ``get_final_message()``.
-            async with self._client.messages.stream(**request_kwargs) as event_stream:
-                async for event in event_stream:
-                    delta_text, delta_thinking = self._event_deltas(event)
-                    if delta_thinking:
-                        reasoning_text += delta_thinking
-                        if reasoning_callback:
-                            await reasoning_callback(delta_thinking, reasoning_text)
-                        if tokens_callback:
-                            await tokens_callback(delta_thinking, _approx_tokens(delta_thinking))
-                    if delta_text:
-                        response_text += delta_text
-                        if response_callback:
-                            await response_callback(delta_text, response_text)
-                        if tokens_callback:
-                            await tokens_callback(delta_text, _approx_tokens(delta_text))
-        else:
-            msg = await self._client.messages.create(**request_kwargs)
-            extracted = extract_response_blocks(getattr(msg, "content", []))
-            response_text = extracted.text
-            reasoning_text = extracted.thinking
+        async for sdk_msg in self._sdk.query(prompt=user_text, options=options):
+            for r_delta, t_delta in self._iter_block_deltas(sdk_msg):
+                if t_delta:
+                    reasoning_text += t_delta
+                    if reasoning_callback:
+                        await reasoning_callback(t_delta, reasoning_text)
+                    if tokens_callback:
+                        await tokens_callback(t_delta, _approx_tokens(t_delta))
+                if r_delta:
+                    response_text += r_delta
+                    if response_callback:
+                        await response_callback(r_delta, response_text)
+                    if tokens_callback:
+                        await tokens_callback(r_delta, _approx_tokens(r_delta))
 
         return response_text, reasoning_text
 
     # ------------------------------------------------------------------
-    # Optional streaming generator (parity with LiteLLMChatWrapper._astream)
+    # _astream — parity with LiteLLMChatWrapper._astream
     # ------------------------------------------------------------------
 
     async def _astream(
@@ -190,53 +180,83 @@ class ClaudeSDKWrapper:
         stop: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> AsyncIterator[str]:
-        system_text, anthropic_messages = self._convert_messages(messages)
-        request_kwargs: dict[str, Any] = {
-            "model": self.model_name,
-            "max_tokens": int(kwargs.pop("max_tokens", 4096)),
-            "messages": anthropic_messages,
-        }
-        if system_text:
-            request_kwargs["system"] = system_text
-        request_kwargs.update(kwargs)
-
-        async with self._client.messages.stream(**request_kwargs) as event_stream:
-            async for event in event_stream:
-                delta_text, _ = self._event_deltas(event)
-                if delta_text:
-                    yield delta_text
+        system_text, user_text = self._convert_messages(messages)
+        options = self._build_options(system_text=system_text)
+        async for sdk_msg in self._sdk.query(prompt=user_text, options=options):
+            for r_delta, _ in self._iter_block_deltas(sdk_msg):
+                if r_delta:
+                    yield r_delta
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _event_deltas(event: Any) -> tuple[str, str]:
-        """Extract (text_delta, thinking_delta) from an Anthropic stream event.
+    def _build_options(self, *, system_text: str) -> Any:
+        """Construct ``ClaudeAgentOptions`` from this wrapper's settings.
 
-        Anthropic's SDK exposes typed events; we only care about
-        ``content_block_delta`` events with ``text_delta`` or ``thinking_delta``
-        sub-types. We probe attributes defensively to stay robust across SDK
-        minor versions.
+        ``allowed_tools=[]`` is the critical guardrail: Agent Zero's own
+        tools (code_execution, call_subordinate, etc.) are dispatched by
+        the outer monologue loop, not by the SDK's tool-use machinery. We
+        only want the LLM to generate text — the SDK becomes a pure
+        completion endpoint.
         """
-        etype = getattr(event, "type", "") or (event.get("type", "") if isinstance(event, dict) else "")
-        if etype != "content_block_delta":
-            return "", ""
-        delta = getattr(event, "delta", None) if not isinstance(event, dict) else event.get("delta")
-        if delta is None:
-            return "", ""
-        dtype = getattr(delta, "type", "") or (delta.get("type", "") if isinstance(delta, dict) else "")
-        if dtype == "text_delta":
-            text = getattr(delta, "text", "") or (delta.get("text", "") if isinstance(delta, dict) else "")
-            return str(text), ""
-        if dtype == "thinking_delta":
-            text = getattr(delta, "thinking", "") or (delta.get("thinking", "") if isinstance(delta, dict) else "")
-            return "", str(text)
-        return "", ""
+        opts_kwargs: dict[str, Any] = {
+            "model": self.model_name,
+            "max_turns": self.max_turns,
+            "allowed_tools": [],
+            "permission_mode": "default",
+        }
+        if system_text:
+            opts_kwargs["system_prompt"] = system_text
+        if self.cli_path:
+            opts_kwargs["cli_path"] = self.cli_path
+        if self.thinking_budget > 0:
+            # Both budget and thinking-config are surfaced so the CLI sees
+            # an intent regardless of which key version it honors.
+            opts_kwargs["max_thinking_tokens"] = self.thinking_budget
+            try:
+                opts_kwargs["thinking"] = self._sdk.ThinkingConfigEnabled(
+                    type="enabled", budget_tokens=self.thinking_budget
+                )
+            except AttributeError:
+                pass
+        return self._sdk.ClaudeAgentOptions(**opts_kwargs)
+
+    def _iter_block_deltas(self, sdk_msg: Any) -> list[tuple[str, str]]:
+        """Yield ``(response_delta, thinking_delta)`` for each content block.
+
+        Only ``AssistantMessage`` carries content blocks. Other message
+        types (``UserMessage`` / ``ResultMessage`` / ``RateLimitEvent`` /
+        ``SystemMessage`` / ``HookEventMessage``) are emitted by the SDK
+        for state-of-the-CLI bookkeeping and yield no deltas.
+
+        Per-block iteration preserves the streaming granularity the
+        agent's UI expects — each ``TextBlock`` becomes one delta, each
+        ``ThinkingBlock`` one reasoning chunk. ``ToolUseBlock`` and
+        other block types are skipped: ``allowed_tools=[]`` in our
+        options keeps the SDK's tool path inert, so anything we see is
+        an upstream surprise we don't want to render as text.
+        """
+        if not isinstance(sdk_msg, self._sdk.AssistantMessage):
+            return []
+        out: list[tuple[str, str]] = []
+        for block in getattr(sdk_msg, "content", None) or []:
+            if isinstance(block, self._sdk.TextBlock):
+                text = getattr(block, "text", "") or ""
+                if text:
+                    out.append((text, ""))
+            elif isinstance(block, self._sdk.ThinkingBlock):
+                thought = getattr(block, "thinking", "") or ""
+                if thought:
+                    out.append(("", thought))
+        return out
 
 
 def _approx_tokens(text: str) -> int:
-    # Lightweight estimate; the real ``approximate_tokens`` lives in
-    # python.helpers.tokens but importing it here would create a cycle on first
-    # provider selection in some contexts.
+    """Lightweight token estimate.
+
+    The accurate ``approximate_tokens`` lives in ``python.helpers.tokens``
+    but importing it here would create a cycle on first provider selection
+    in some contexts.
+    """
     return max(1, len(text) // 4)

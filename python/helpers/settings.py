@@ -164,9 +164,15 @@ class Settings(TypedDict):
 
     # Spec 02-claude-sdk: opt-in Claude Agent SDK provider settings.
     # These are only consumed when chat_model_provider == "claude-sdk".
+    # Auth flows through the local `claude` CLI (Pro / Max subscription) —
+    # ``claude_sdk_api_key`` is retained as a typed field for migration
+    # ergonomics but is NOT consumed by the wrapper (the field exists so
+    # existing settings.json files with the old key don't fail to parse).
     claude_sdk_api_key: str
     claude_sdk_model: str
     claude_sdk_thinking_budget: int
+    claude_sdk_cli_path: str
+    claude_sdk_max_turns: int
 
     update_check_enabled: bool
 
@@ -644,9 +650,14 @@ def get_default_settings() -> Settings:
         secrets="",
         litellm_global_kwargs=get_default_value("litellm_global_kwargs", {}),
         # Spec 02-claude-sdk defaults — disabled until user opts in.
+        # cli_path="" → claude_agent_sdk looks for `claude` on PATH (the
+        # common case). Set this only on machines where the CLI isn't on
+        # PATH (e.g., Mac with claude installed via Homebrew Cellar).
         claude_sdk_api_key=get_default_value("claude_sdk_api_key", ""),
         claude_sdk_model=get_default_value("claude_sdk_model", "claude-sonnet-4-5"),
         claude_sdk_thinking_budget=get_default_value("claude_sdk_thinking_budget", 0),
+        claude_sdk_cli_path=get_default_value("claude_sdk_cli_path", ""),
+        claude_sdk_max_turns=get_default_value("claude_sdk_max_turns", 1),
         update_check_enabled=get_default_value("update_check_enabled", True),
     )
 

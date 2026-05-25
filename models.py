@@ -909,18 +909,24 @@ def get_chat_model(
     # Import is lazy so the base wheel does not require the [claude-sdk] extra.
     if orig == "claude-sdk":
         from hyperagent0.claude_sdk.wrapper import ClaudeSDKWrapper
-        # Fill in api_key / model / thinking_budget from settings if not supplied.
+        # claude-agent-sdk delegates auth to the Claude CLI — no API key
+        # consumed here. We surface cli_path / thinking_budget / max_turns
+        # / model from settings if the caller didn't override.
         try:
             current = settings.get_settings()  # type: ignore[union-attr]
         except Exception:
             current = {}
-        if "api_key" not in kwargs:
-            key = current.get("claude_sdk_api_key") or get_api_key("anthropic")
-            if key and key not in ("None", "NA"):
-                kwargs["api_key"] = key
+        if "cli_path" not in kwargs:
+            cp = current.get("claude_sdk_cli_path") or ""
+            if cp:
+                kwargs["cli_path"] = cp
         if "thinking_budget" not in kwargs:
             kwargs["thinking_budget"] = int(current.get("claude_sdk_thinking_budget", 0) or 0)
+        if "max_turns" not in kwargs:
+            kwargs["max_turns"] = int(current.get("claude_sdk_max_turns", 1) or 1)
         name = name or current.get("claude_sdk_model") or "claude-sonnet-4-5"
+        # Strip any stale api_key — claude-agent-sdk doesn't consume it.
+        kwargs.pop("api_key", None)
         return ClaudeSDKWrapper(  # type: ignore[return-value]
             model=name, provider=orig, model_config=model_config, **kwargs
         )

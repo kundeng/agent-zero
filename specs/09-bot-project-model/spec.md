@@ -1,6 +1,6 @@
 ---
 spec_id: 09-bot-project-model
-status: SHIPPED
+status: PARTIAL
 since: 2026-05-24
 until: null
 epic: channels

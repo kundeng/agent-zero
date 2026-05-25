@@ -1,6 +1,6 @@
 ---
 spec_id: 02-claude-sdk
-status: DRAFT
+status: PARTIAL
 since: 2026-05-20
 until: null
 epic: llm-providers
@@ -72,24 +72,10 @@ Where extensions can replace patches, prefer extensions per CLAUDE.md ("Extensio
 ## Tasks
 
 ### P1 — Must Do
-- [ ] 1.1 Add `[claude-sdk]` extra to `pyproject.toml`
-  - `[claude-sdk] = ["anthropic>=0.40", "claude-agent-sdk"]` (versions pinned at implementation time)
-  - Confirm base install + `haz --help` work without the extra installed
-  - [src:pyproject.toml]
-- [ ] 1.2 Create `hyperagent0/claude_sdk/bridge.py`
-  - Tool schema translator: `Tool` class → Claude JSON schema (via runtime introspection of kwargs)
-  - Response mapper: Claude `tool_use` blocks → Agent Zero tool dispatch
-  - Thinking-block extractor (returns `(thinking, text, tool_uses)` tuples)
-- [ ] 1.3 Create `hyperagent0/claude_sdk/wrapper.py` (`ClaudeSDKWrapper` class)
-  - Implements the same interface as `LiteLLMChatWrapper`
-  - Uses `anthropic.AsyncAnthropic()` for streaming (lazy import inside `__init__`)
-  - Maps Agent Zero messages format to/from Claude Messages API format
-  - Register in `models.py` with a minimal dispatch patch: when `chat_model_provider == "claude-sdk"`, instantiate `hyperagent0.claude_sdk.wrapper.ClaudeSDKWrapper`
-  - [src:models.py, hyperagent0/claude_sdk/wrapper.py]
-- [ ] 1.4 Add Claude SDK provider settings
-  - Fields: `claude_sdk_thinking_budget`, `claude_sdk_api_key`, `claude_sdk_model`
-  - Co-located with spec 01's `sandbox_mode` field addition in `python/helpers/settings.py` (same patch site, ideally same PR if specs 01 and 02 land together)
-  - [src:python/helpers/settings.py]
+- [x] 1.1 `[claude-sdk]` extra in `pyproject.toml` (`claude-agent-sdk>=0.2.87`, `anthropic>=0.40` for back-compat). Verified `haz --help` works without the extra (lazy import).
+- [x] 1.2 `hyperagent0/claude_sdk/bridge.py` — Tool→Claude schema, tool_use mapping, thinking extractor. 7 tests in `tests/test_claude_sdk_bridge.py` (dict-payload based, no anthropic import).
+- [x] 1.3 `hyperagent0/claude_sdk/wrapper.py` — **uses `claude_agent_sdk.query()` (CLI subprocess, subscription auth), NOT `anthropic.AsyncAnthropic` (API key).** Registered via `models.get_chat_model("claude-sdk")`. 6 tests in `tests/test_claude_sdk_wrapper.py`.
+- [x] 1.4 Settings fields: `claude_sdk_model`, `claude_sdk_cli_path`, `claude_sdk_thinking_budget`, `claude_sdk_max_turns`. `claude_sdk_api_key` retained as a typed field but unused (silently dropped by wrapper).
 - [ ] 1.5 Handle thinking blocks in the agent monologue
   - **First preference: extension-based.** Try implementing thinking-block handling as a `python/extensions/before_main_llm_call/` + `process_chain_end/` pair, registering through `python/helpers/extension.py`'s `@extensible` framework.
   - **Fallback: patch `agent.py` monologue loop.** Only if the extension hooks don't expose enough state. Detect thinking content type in response, log thinking blocks (visible in UI but not injected back as user content), pass text + tool_use to existing processing.
@@ -124,3 +110,49 @@ Where extensions can replace patches, prefer extensions per CLAUDE.md ("Extensio
 **2026-05-20** — Initial spec. Confirmed LiteLLM is the only provider path today (`models.py:LiteLLMChatWrapper`). `mcp` package already in requirements.txt. `anthropic` package needs to be added.
 
 **2026-05-20** — Aligned with spec 01 D9 wrapper architecture. All net-new code moves under `hyperagent0/claude_sdk/` (wrapper, bridge, mcp, cost). `anthropic` is now a `[claude-sdk]` extra (per spec 01 D7), not a base requirement — keeps `pip install hyperagent0` lean. Task 1.5 (thinking blocks) updated to prefer extension-based implementation over an `agent.py` patch, per CLAUDE.md convention. Documented the spec-02 conflict-surface budget: 4 upstream files patched (`models.py`, `agent.py`, `settings.py` (shared with spec 01), `mcp_handler.py`), one more in P2 (`rate_limiter.py`).
+
+**2026-05-25 (D1 reframed: CLI-auth, not API-key)** — Pivoted the
+wrapper away from `anthropic.AsyncAnthropic` (metered API key) to
+`claude-agent-sdk` (subprocess to local `claude` CLI, subscription
+auth). Per project memory 2026-05-22 ("spec 02 SDK-only via local
+creds"), this is the path that unblocks free Mac usage for any user
+with a Claude Pro / Max subscription.
+
+Changes:
+
+* `hyperagent0/claude_sdk/wrapper.py` rewritten. Lazy-imports
+  `claude_agent_sdk`. ``allowed_tools=[]`` keeps the SDK in
+  pure-completion mode (Agent Zero's own monologue loop owns tool
+  dispatch). ``max_turns=1`` prevents the SDK from double-looping
+  on top of the agent loop.
+* `models.get_chat_model("claude-sdk")` dispatch updated: drops the
+  ``api_key`` → wrapper path (the SDK doesn't consume it), surfaces
+  the new ``claude_sdk_cli_path`` and ``claude_sdk_max_turns``
+  settings.
+* `python/helpers/settings.py` gains ``claude_sdk_cli_path`` (empty
+  → search PATH) and ``claude_sdk_max_turns`` (default 1).
+  ``claude_sdk_api_key`` retained as a typed field so old
+  settings.json files still parse; it's silently discarded by the
+  wrapper.
+* `requirements.txt` bumped `mcp` from ==1.22.0 to `>=1.23.0,<2.0`
+  — `claude-agent-sdk` requires `mcp>=1.23`. Verified `mcp_handler`
+  + 240 existing channel/haz/project tests still pass under 1.27.1.
+* `pyproject.toml` extras: `claude-agent-sdk>=0.2.87` is the
+  primary dep; `anthropic>=0.40` kept for back-compat against any
+  direct importers but no longer used by the wrapper.
+
+Tests: 6 new in `tests/test_claude_sdk_wrapper.py` (stub-SDK
+injection so they run without the extra installed) — lazy import,
+delta aggregation, non-AssistantMessage filtering, cli_path /
+thinking_budget / max_turns propagation, `_astream` text-only,
+missing-SDK error message. Live verified against local `claude`
+CLI: `unified_call` round-trips text + thinking, no API key
+present in env.
+
+Status set to PARTIAL: P1.3 (wrapper) shipped end-to-end; P1.1
+(extras pin), P1.4 (settings) shipped; P1.2 (bridge) was already
+in place from the earlier draft. **P1.5 (thinking-block extension)
+and P1.6 (MCP wiring through SDK native path) still open** — both
+require touching `agent.py` / `mcp_handler.py` and aren't on the
+critical path for "agent runs on Mac using Claude CLI auth", so
+deferred unless live use surfaces a need.

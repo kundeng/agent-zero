@@ -26,11 +26,16 @@ classifiers = [
 dynamic = ["dependencies"]
 
 [project.optional-dependencies]
-# Spec 02: opt-in Claude Agent SDK provider. Base wheel does not depend on these;
-# `anthropic` MUST NOT be imported unless chat_model_provider=claude-sdk is selected.
+# Spec 02: opt-in Claude Agent SDK provider. The actual wrapper uses
+# claude-agent-sdk (CLI-auth path). `anthropic` is no longer required at
+# runtime — claude-agent-sdk auths through the locally-installed `claude`
+# CLI, so a user with a Pro / Max subscription gets LLM access for free
+# (no metered API key needed). We keep `anthropic` here for back-compat
+# code paths that import it directly; safe to drop once nothing imports
+# it (see Spec 02 D1 reframed 2026-05-25).
 claude-sdk = [
+    "claude-agent-sdk>=0.2.87",
     "anthropic>=0.40",
-    "claude-agent-sdk",
 ]
 telegram = ["python-telegram-bot>=21"]
 slack = ["slack-bolt>=1.18"]
@@ -41,8 +46,8 @@ channels = [
     "discord.py>=2.3",
 ]
 all = [
+    "claude-agent-sdk>=0.2.87",
     "anthropic>=0.40",
-    "claude-agent-sdk",
     "python-telegram-bot>=21",
     "slack-bolt>=1.18",
     "discord.py>=2.3",

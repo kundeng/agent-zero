@@ -120,14 +120,14 @@ Status legend: **SHIPPED** = P1 in-spec features all merged with tests. **PARTIA
 | Spec | Status | What it does | Depends on |
 |------|--------|-------------|------------|
 | [01-host-first](specs/01-host-first/spec.md) | SHIPPED | Agent runs on host, sandbox only for code exec | — |
-| [02-claude-sdk](specs/02-claude-sdk/spec.md) | DRAFT | Claude Agent SDK as first-class provider alongside LiteLLM | — |
+| [02-claude-sdk](specs/02-claude-sdk/spec.md) | PARTIAL | Claude provider via local `claude` CLI auth (subscription, no API key). P1.1–P1.4 shipped; thinking-extension + MCP-bridge deferred | — |
 | [03-daemon-cli](specs/03-daemon-cli/spec.md) | SHIPPED | `hyperagent0 start/stop/status` (alias `haz`), systemd, pip install | 01 |
 | [04-chat-channels](specs/04-chat-channels/spec.md) | SHIPPED | Telegram, Slack, Discord channel adapters (42 tests) | 01, 03 |
 | [05-project-isolation](specs/05-project-isolation/spec.md) | WITHDRAWN | Scrapped 2026-05-22 — sandbox mode is a single global setting; no per-project override, no cgroup/docker/podman backends | 01 |
 | [06-channel-hardening](specs/06-channel-hardening/spec.md) | SHIPPED | Mention-aware routing, reply-to, SQL migrations (only `on_action` adapter wire-up pending; D5 sandbox-override withdrawn with spec 05) | 04 |
 | [07-install-ux](specs/07-install-ux/spec.md) | SHIPPED | curl\|bash installer, repo path resolver, install user journeys | 01, 03 |
 | [08-channel-provisioning-ux](specs/08-channel-provisioning-ux/spec.md) | PARTIAL | Settings → Channels UI tab + `haz channel` CLI + Slack/Telegram/Discord provisioners (157 tests). **Slack wizard creates orphan apps on non-distributable workspaces — D10 documents the pivot to paste-manifest flow that next session must implement.** Bot verified live in bayeslearner via standalone runtime, not full daemon (`invalid_auth` issue in daemon is unresolved). | 04, 06 |
-| [09-bot-project-model](specs/09-bot-project-model/spec.md) | SHIPPED | Multi-bot per platform, `channels.json` list-shape, ThreadStore `bot_name` key, `_default` implicit project + four-site branch collapse | 04, 06, 08 |
+| [09-bot-project-model](specs/09-bot-project-model/spec.md) | PARTIAL | Multi-bot per platform + `_default` collapse all merged (P1.1–P1.14 + P1.9). **P2 integration tests not written; inherits spec 08's daemon `invalid_auth` blocker so multi-bot is unproven inside `haz start`.** | 04, 06, 08 |
 
 ### Setting up Slack — read the runbook first
 
@@ -160,3 +160,20 @@ haz check   # should return "OK (Xs) — openai/cc/claude-sonnet-4-6 responded."
 ```
 
 This is documentation for the maintainer's local setup, NOT something `install.sh` should write into a fresh install — end users configure the LLM via the web UI (spec 07 D2).
+
+### Claude CLI provider (no API key)
+
+For a host that has the `claude` CLI installed and logged in (Pro / Max
+subscription), point the agent at it directly:
+
+```bash
+pip install hyperagent0[claude-sdk]   # adds claude-agent-sdk + mcp>=1.23
+haz config set chat_model_provider claude-sdk
+haz config set chat_model_name claude-sonnet-4-5
+# Optional — only if `claude` is not on PATH:
+haz config set claude_sdk_cli_path /opt/homebrew/bin/claude
+```
+
+The wrapper spawns `claude` as a subprocess and uses whatever auth the
+CLI is logged into. No `ANTHROPIC_API_KEY` consumed. This is the path
+that makes the Mac install useful without paying for API tokens.
