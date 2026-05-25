@@ -72,14 +72,20 @@ def test_channel_status_json_mode(isolated_env):
 
 
 def test_provision_show_steps_for_slack(isolated_env):
+    """Spec 08 D10: wizard surface is the paste-manifest flow
+    (manifest_config / paste_bot_token / paste_app_token / summary).
+    The old config_token/install OAuth path is still callable from
+    ``provision()`` but isn't surfaced by ``wizard_steps()`` anymore."""
+
     runner = CliRunner()
     result = runner.invoke(
         channel_cmd.command, ["provision", "slack", "--show-steps"]
     )
     assert result.exit_code == 0, result.output
-    assert "config_token" in result.output
-    assert "install" in result.output
-    assert "app_token" in result.output
+    assert "manifest_config" in result.output
+    assert "paste_bot_token" in result.output
+    assert "paste_app_token" in result.output
+    assert "summary" in result.output
 
 
 def test_provision_show_steps_for_telegram(isolated_env):

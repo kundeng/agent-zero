@@ -229,6 +229,27 @@ For **distributable** apps (Slack App Directory listing or enterprise-internal d
 
 **Implementation status (2026-05-23)**: code currently still does the apps.manifest.create call (D3 path), which creates orphan apps. **Next session must rework the Slack wizard** to skip the create step and just hand the user the manifest JSON to paste in their UI. The OAuth callback handler can stay for distributable apps but should be gated.
 
+**Implementation done (2026-05-25)**: Shipped. `wizard_steps()` now
+returns the D10 four-step flow:
+
+1. `manifest_config` — collect `bot_name`, `display_name`, privacy
+   options. No Slack API call. Generates the manifest JSON and stashes
+   it in session state + `StepResult.extra["manifest_json"]` and
+   embeds it in `StepResult.message` so even minimal renderers (CLI)
+   surface something copyable.
+2. `paste_bot_token` (kind=`link_with_paste`) — URL to
+   api.slack.com/apps, paste field for the xoxb- token. Calls
+   `auth.test` upfront so a typo'd token doesn't silently fail at
+   adapter-start time.
+3. `paste_app_token` — paste the xapp- Socket Mode token.
+4. `summary` — terminal.
+
+The legacy D3 path (`config_token` step → `apps.manifest.create` →
+OAuth callback → `install_paste_fallback`) is still callable from
+`provision()` for distributable-app workflows but is not surfaced by
+`wizard_steps()`. Tests cover both paths (29 in
+`tests/test_channels_provision_slack.py`, +5 D10-specific).
+
 ### D9: Adapter hardening while we're here
 
 **Choice**: Close two small known gaps in `hyperagent0/channels/slack.py` flagged by `NEXT_SESSION_SLACK.md`:
@@ -355,7 +376,7 @@ For **distributable** apps (Slack App Directory listing or enterprise-internal d
 
 ### P2.5 — Live-test corrections (next session must do)
 
-- [ ] 2.5.1 Slack wizard: implement D10 path. Detect whether the user wants distributable or single-workspace; on single-workspace, **skip** `apps.manifest.create` and present the manifest JSON as a copy-block with paste-back instructions. Don't create orphan apps.
+- [x] 2.5.1 Slack wizard: D10 path shipped 2026-05-25. The default wizard flow is now paste-manifest (`manifest_config` → `paste_bot_token` → `paste_app_token` → `summary`) — no `apps.manifest.create` call, no orphans. The legacy D3 path remains callable from `provision()` for distributable apps but is no longer the default. 5 new tests in `tests/test_channels_provision_slack.py`.
 - [x] 2.5.2 Daemon's slack-bolt `invalid_auth` issue. **Resolved 2026-05-25**: no longer reproduces. Verified via full `haz start --port 50080` boot — uvicorn comes up, Bolt app prints "⚡️ Bolt app is running!", Socket Mode session establishes cleanly, no auth error. Most likely incidentally fixed by spec 09's `lifecycle.start_enabled_channels` rewrite (the multi-bot refactor restructured the order in which adapters are instantiated + connected). Diagnostic note: when reproducing daemon Slack issues, re-enable logging AFTER importing `run_ui` — that module sets root logger to WARNING at line 37, silencing INFO logs that hide what's actually happening.
 - [ ] 2.5.3 Provide `haz slack run` standalone-mode command that boots only the channels stack (no UI, no LLM) for cases where the user wants a chat bot without the rest of agent-zero. Equivalent to `/tmp/slack-standalone.py` from the live test, but production-quality.
 

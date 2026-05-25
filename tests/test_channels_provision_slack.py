@@ -454,15 +454,19 @@ def test_test_connection_without_token_raises(isolated_env):
 # ---------------------------------------------------------------------------
 
 
-def test_wizard_steps_has_five_steps():
+def test_wizard_steps_d10_layout():
+    """Spec 08 D10: the wizard takes 4 steps (manifest_config →
+    paste_bot_token → paste_app_token → summary). The legacy
+    config_token/install/install_paste_fallback path is still callable
+    from provision() but not surfaced by wizard_steps()."""
+
     p = slack_provisioner.SlackProvisioner()
     steps = p.wizard_steps()
     ids = [s.id for s in steps]
     assert ids == [
-        "config_token",
-        "install",
-        "install_paste_fallback",
-        "app_token",
+        "manifest_config",
+        "paste_bot_token",
+        "paste_app_token",
         "summary",
     ]
 
@@ -470,10 +474,9 @@ def test_wizard_steps_has_five_steps():
 def test_wizard_step_kinds():
     p = slack_provisioner.SlackProvisioner()
     steps = {s.id: s for s in p.wizard_steps()}
-    assert steps["config_token"].kind == "input"
-    assert steps["install"].kind == "link_with_callback"
-    assert steps["install_paste_fallback"].kind == "link_with_paste"
-    assert steps["app_token"].kind == "link_with_paste"
+    assert steps["manifest_config"].kind == "input"
+    assert steps["paste_bot_token"].kind == "link_with_paste"
+    assert steps["paste_app_token"].kind == "link_with_paste"
     assert steps["summary"].kind == "summary"
 
 
@@ -588,14 +591,186 @@ def test_two_named_bots_upsert_into_list(isolated_env):
 
 
 def test_wizard_first_step_collects_bot_name():
-    """The first step's field list now leads with `bot_name` so the UI
-    pre-fills it before secrets get collected."""
+    """The first step's field list leads with ``bot_name`` so the UI
+    pre-fills it before any other inputs. (Spec 08 D10: the D10 first
+    step has no secret fields — it just generates a manifest.)"""
 
     p = slack_provisioner.SlackProvisioner()
     first_step = p.wizard_steps()[0]
-    assert first_step.id == "config_token"
+    assert first_step.id == "manifest_config"
     field_ids = [f.id for f in first_step.fields]
     assert field_ids[0] == "bot_name", (
-        "bot_name must appear before config_token so the wizard collects "
-        "it before any secrets"
+        "bot_name must be the first field so the wizard collects the "
+        "local identifier before anything else"
     )
+
+
+# ---------------------------------------------------------------------------
+# Spec 08 D10 — paste-manifest flow (no orphan apps)
+# ---------------------------------------------------------------------------
+
+
+def test_d10_step1_emits_manifest_json_in_message(isolated_env):
+    """D10 step 1 (``manifest_config``) generates the manifest, stashes
+    it in the session, and surfaces it in the response message for the
+    user to copy into Slack's UI. **No Slack API call is made.**"""
+
+    ctx = _make_ctx(isolated_env["channels_path"])
+    p = slack_provisioner.SlackProvisioner()
+
+    # Anything calling urlopen would prove an unwanted HTTP call slipped in.
+    with patch(
+        "urllib.request.urlopen",
+        side_effect=AssertionError("D10 step 1 must not hit the network"),
+    ):
+        result = p.provision(
+            "manifest_config",
+            {
+                "bot_name": "hazbot",
+                "display_name": "hyperagent",
+                "include_private_channels": True,
+                "include_dms": True,
+            },
+            ctx,
+        )
+
+    assert result.error is None
+    assert result.next_step == "paste_bot_token"
+    # Manifest landed in extra + session for downstream rendering.
+    assert "manifest_json" in result.extra
+    assert ctx.session.get("manifest_json") == result.extra["manifest_json"]
+    # The message includes the JSON body so CLI / minimal UI users still
+    # see something to copy without depending on a custom renderer.
+    assert "--- MANIFEST JSON ---" in result.message
+    parsed = json.loads(result.extra["manifest_json"])
+    # display_information.name is the app catalog label (brand string
+    # from the manifest builder); bot_user.display_name is the
+    # operator-chosen @-handle.
+    assert parsed["features"]["bot_user"]["display_name"] == "hyperagent"
+
+
+def test_d10_step2_validates_and_persists_bot_token(isolated_env):
+    """D10 step 2 (``paste_bot_token``) calls auth.test on the pasted
+    token. Slack rejection short-circuits with a user-facing error;
+    success persists ``SLACK_BOT_TOKEN`` and advances to step 3."""
+
+    ctx = _make_ctx(isolated_env["channels_path"])
+    p = slack_provisioner.SlackProvisioner()
+
+    auth_payload = {
+        "ok": True,
+        "team": "BayesLearner",
+        "team_id": "T0123",
+        "user": "hyperagent",
+        "user_id": "U0456",
+        "bot_id": "B0789",
+    }
+    with patch(
+        "urllib.request.urlopen",
+        return_value=_mocked_response(auth_payload),
+    ):
+        result = p.provision(
+            "paste_bot_token",
+            {"bot_token": "xoxb-real-token"},
+            ctx,
+        )
+
+    assert result.error is None
+    assert result.next_step == "paste_app_token"
+    secrets_text = (isolated_env["base"] / "usr" / "secrets.env").read_text()
+    assert 'SLACK_BOT_TOKEN="xoxb-real-token"' in secrets_text
+    assert 'SLACK_TEAM_ID="T0123"' in secrets_text
+
+
+def test_d10_step2_rejects_non_xoxb_token(isolated_env):
+    """A token that doesn't start with ``xoxb-`` is rejected without
+    making an HTTP call — saves the operator an obvious 30-second
+    debug cycle."""
+
+    ctx = _make_ctx(isolated_env["channels_path"])
+    p = slack_provisioner.SlackProvisioner()
+    with patch(
+        "urllib.request.urlopen",
+        side_effect=AssertionError("invalid token must not hit Slack"),
+    ):
+        result = p.provision(
+            "paste_bot_token",
+            {"bot_token": "not-a-real-token"},
+            ctx,
+        )
+    assert result.error is not None
+    assert "xoxb-" in result.error
+    assert result.next_step is None
+
+
+def test_d10_step2_surfaces_slack_auth_failure(isolated_env):
+    """A typo'd token that LOOKS valid (xoxb- prefix) must be caught
+    by the upfront auth.test rather than failing at adapter-start."""
+
+    ctx = _make_ctx(isolated_env["channels_path"])
+    p = slack_provisioner.SlackProvisioner()
+
+    with patch(
+        "urllib.request.urlopen",
+        return_value=_mocked_response({"ok": False, "error": "invalid_auth"}),
+    ):
+        result = p.provision(
+            "paste_bot_token",
+            {"bot_token": "xoxb-typo"},
+            ctx,
+        )
+    assert result.error is not None
+    assert "invalid_auth" in result.error
+    # Token must NOT have been persisted on a rejected validation.
+    secrets_text = (isolated_env["base"] / "usr" / "secrets.env").read_text()
+    assert "xoxb-typo" not in secrets_text
+
+
+def test_d10_full_flow_writes_both_tokens_and_channels_block(isolated_env):
+    """End-to-end: step 1 (manifest), step 2 (bot token), step 3 (app
+    token), step 4 (summary). After step 3 the channels.json block
+    exists and references the per-bot secret placeholders."""
+
+    ctx = _make_ctx(isolated_env["channels_path"])
+    p = slack_provisioner.SlackProvisioner()
+
+    # Step 1: no HTTP.
+    r1 = p.provision(
+        "manifest_config",
+        {"bot_name": "default", "display_name": "hyperagent"},
+        ctx,
+    )
+    assert r1.next_step == "paste_bot_token"
+
+    # Step 2: auth.test mocked OK.
+    with patch(
+        "urllib.request.urlopen",
+        return_value=_mocked_response(
+            {"ok": True, "team": "Bay", "team_id": "T1", "user_id": "U1"}
+        ),
+    ):
+        r2 = p.provision(
+            "paste_bot_token", {"bot_token": "xoxb-real"}, ctx
+        )
+    assert r2.next_step == "paste_app_token"
+
+    # Step 3: app token. No HTTP — the helper just persists.
+    r3 = p.provision(
+        "paste_app_token", {"app_token": "xapp-real"}, ctx
+    )
+    assert r3.next_step == "summary"
+
+    secrets_text = (isolated_env["base"] / "usr" / "secrets.env").read_text()
+    assert 'SLACK_BOT_TOKEN="xoxb-real"' in secrets_text
+    assert 'SLACK_APP_TOKEN="xapp-real"' in secrets_text
+
+    channels = json.loads(isolated_env["channels_path"].read_text())
+    # legacy bot_name "default" → dict-shape or single-element list-shape;
+    # we accept either as long as the token placeholders land.
+    if isinstance(channels.get("slack"), list):
+        block = channels["slack"][0]
+    else:
+        block = channels["slack"]
+    assert block["token"] == "$$secret(SLACK_BOT_TOKEN)"
+    assert block["app_token"] == "$$secret(SLACK_APP_TOKEN)"
+    assert block["enabled"] is True

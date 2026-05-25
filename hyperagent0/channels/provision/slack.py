@@ -71,6 +71,8 @@ _K_INSTALL_URL = "install_url"
 _K_REFRESH_TOKEN = "refresh_token"  # in-memory only; never persisted
 _K_OAUTH_DONE = "oauth_done"
 _K_APP_TOKEN_DONE = "app_token_done"
+_K_MANIFEST_JSON = "manifest_json"  # D10: stashed for inclusion in step-2 message
+_K_DISPLAY_NAME = "display_name"
 
 
 class SlackProvisioner(BaseProvisioner):
@@ -93,63 +95,48 @@ class SlackProvisioner(BaseProvisioner):
     # ------------------------------------------------------------------
 
     def wizard_steps(self) -> list[WizardStep]:
+        """Spec 08 D10 wizard — paste-manifest, no orphan apps.
+
+        Previously the wizard called ``apps.manifest.create`` (D3 path)
+        which leaves orphan apps for non-distributable workspaces (the
+        common case — see project memory ``project_slack_install_models``).
+        D10 replaces that with the manual paste-manifest flow that's
+        actually supported by Slack for any workspace.
+
+        The old API-creation path is still callable from ``provision()``
+        via the ``config_token`` step id, for the rare distributable-app
+        case; the wizard simply doesn't surface it.
+        """
+
         return [
             WizardStep(
-                id="config_token",
+                id="manifest_config",
                 kind="input",
-                label="Enter your Slack configuration access token",
+                label="Configure your Slack bot",
                 help_text=(
-                    "Generate this at https://api.slack.com/apps — look "
-                    "for the 'Your apps' page and the configuration "
-                    "tokens section. The token starts with xoxe.xoxp- "
-                    "and lives for ~12 hours. The optional refresh "
-                    "token lets the provisioner auto-rotate if the "
-                    "access token expires mid-flow."
+                    "We'll generate a Slack app manifest you can paste "
+                    "into Slack's UI. No 'config access token' from "
+                    "Slack needed — the app gets created in your "
+                    "developer account via the standard Create-App UI."
                 ),
                 fields=[
                     WizardField(
                         id="bot_name",
-                        label="Bot name",
+                        label="Bot name (local identifier)",
                         kind="text",
                         placeholder="default",
                         default="default",
                         required=True,
                         help_text=(
-                            "Local identifier for this bot. Used in "
-                            "logs, channels.json, and per-bot secret "
-                            "keys. Pick something unique within this "
-                            "haz install if you plan to run more than "
-                            "one Slack bot."
-                        ),
-                    ),
-                    WizardField(
-                        id="config_token",
-                        label="Configuration access token",
-                        kind="password",
-                        placeholder="xoxe.xoxp-...",
-                        secret=True,
-                        required=True,
-                        help_text=(
-                            "Used once at provision time, then discarded "
-                            "in-memory. Never written to disk."
-                        ),
-                    ),
-                    WizardField(
-                        id="refresh_token",
-                        label="Refresh token (optional)",
-                        kind="password",
-                        placeholder="xoxe-...",
-                        secret=True,
-                        required=False,
-                        help_text=(
-                            "Provided alongside the access token. Used "
-                            "if the access token expires while the "
-                            "wizard is open."
+                            "Used in logs, channels.json, and per-bot "
+                            "secret keys. Pick something unique within "
+                            "this haz install if you plan to run more "
+                            "than one Slack bot."
                         ),
                     ),
                     WizardField(
                         id="display_name",
-                        label="Bot display name",
+                        label="Bot display name (in Slack)",
                         kind="text",
                         placeholder="hyperagent",
                         default="hyperagent",
@@ -173,55 +160,46 @@ class SlackProvisioner(BaseProvisioner):
                         required=False,
                     ),
                 ],
-                next_on_success="install",
+                next_on_success="paste_bot_token",
             ),
             WizardStep(
-                id="install",
-                kind="link_with_callback",
-                label="Install the app to your Slack workspace",
-                help_text=(
-                    "Click the link below. Slack opens the install "
-                    "consent page in a new tab — review the scopes "
-                    "and click Allow. The tab will close itself when "
-                    "the bot token is captured. If your browser can't "
-                    "reach this host, the wizard switches to a paste "
-                    "fallback after 90 seconds."
-                ),
-                timeout_s=90,
-                next_on_success="app_token",
-                next_on_timeout="install_paste_fallback",
-            ),
-            WizardStep(
-                id="install_paste_fallback",
+                id="paste_bot_token",
                 kind="link_with_paste",
-                label="Paste the bot token shown by Slack",
+                label="Create the Slack app from the manifest, then paste the bot token",
                 help_text=(
-                    "If the auto-callback didn't fire, open "
-                    "api.slack.com/apps/<your-app-id>/install-app, "
-                    "click 'Install to Workspace', and paste the "
-                    "bot token (starts with xoxb-)."
+                    "Instructions and the manifest JSON appear above "
+                    "this form when you continue from step 1. Then:\n"
+                    "1. Open https://api.slack.com/apps\n"
+                    "2. Click 'Create New App' → 'From a manifest'\n"
+                    "3. Pick your workspace, paste the JSON, click Next → Create\n"
+                    "4. On the new app's page sidebar: 'Install App' → 'Install to Workspace' → Allow\n"
+                    "5. On 'OAuth & Permissions', copy the Bot User OAuth Token (starts with xoxb-)\n"
+                    "Paste it below."
                 ),
+                url="https://api.slack.com/apps",
                 fields=[
                     WizardField(
                         id="bot_token",
-                        label="Bot token (xoxb-...)",
+                        label="Bot User OAuth Token (xoxb-...)",
                         kind="password",
                         secret=True,
                         required=True,
                     ),
                 ],
-                next_on_success="app_token",
+                next_on_success="paste_app_token",
             ),
             WizardStep(
-                id="app_token",
+                id="paste_app_token",
                 kind="link_with_paste",
                 label="Generate the Socket Mode app-level token",
                 help_text=(
-                    "Slack does not stably expose this via the "
-                    "manifest API. Open the URL below, scroll to "
-                    "App-Level Tokens, generate a token with "
-                    "the connections:write scope, and paste it."
+                    "On the same app page in Slack: 'Basic Information' "
+                    "→ scroll to 'App-Level Tokens' → click 'Generate "
+                    "Token and Scopes' → name it (e.g. 'sockets'), add "
+                    "scope 'connections:write' → Generate. Copy the "
+                    "xapp- token and paste it below."
                 ),
+                url="https://api.slack.com/apps",
                 fields=[
                     WizardField(
                         id="app_token",
@@ -252,12 +230,18 @@ class SlackProvisioner(BaseProvisioner):
     def provision(
         self, step_id: str, inputs: dict[str, Any], ctx: ProvisionContext
     ) -> StepResult:
+        # D10 default path (paste-manifest, no orphan apps):
+        if step_id == "manifest_config":
+            return self._step_manifest_config(inputs, ctx)
+        if step_id == "paste_bot_token":
+            return self._step_paste_bot_token_d10(inputs, ctx)
+        if step_id == "paste_app_token":
+            return self._step_app_token(inputs, ctx)
+        # Legacy D3 path (kept callable for distributable-app workflows
+        # but not surfaced by wizard_steps anymore):
         if step_id == "config_token":
             return self._step_config_token(inputs, ctx)
         if step_id == "install":
-            # The install step is purely UI — the install URL was
-            # composed in step 1 and stashed in the session. Re-emit
-            # it so the UI can re-render after a reload.
             install_url = ctx.session.get(_K_INSTALL_URL)
             if not install_url:
                 return StepResult(
@@ -277,7 +261,126 @@ class SlackProvisioner(BaseProvisioner):
         return StepResult(error=f"unknown step {step_id!r}")
 
     # ------------------------------------------------------------------
-    # Step 1 — manifest registration
+    # D10 Step 1 — generate manifest, stash for step 2
+    # ------------------------------------------------------------------
+
+    def _step_manifest_config(
+        self, inputs: dict[str, Any], ctx: ProvisionContext
+    ) -> StepResult:
+        """Generate the Slack app manifest from user inputs.
+
+        D10 path: no Slack API call. The manifest JSON gets stashed in
+        session state so step 2 can emit it as a copyable string. The
+        operator pastes the JSON at https://api.slack.com/apps's
+        "Create New App → From a manifest" form.
+
+        ``ctx.bot_name`` is sourced upstream from ``inputs["bot_name"]``
+        by ``dispatch.run_step`` — we don't read it directly here.
+        """
+        import json
+
+        display_name = (
+            str(inputs.get("display_name", "")).strip() or "hyperagent"
+        )
+        include_private = _truthy(inputs.get("include_private_channels", True))
+        include_dms = _truthy(inputs.get("include_dms", True))
+
+        # D10 manifest is identical to the D3 one MINUS the
+        # oauth_config.redirect_urls (no OAuth callback in the paste flow).
+        # We keep the helper that builds the full manifest and let Slack
+        # ignore extra fields — simpler than threading a "no redirect"
+        # toggle through build_slack_manifest.
+        manifest = build_slack_manifest(
+            display_name=display_name,
+            # An unused but well-formed redirect URL keeps the manifest
+            # schema-valid for Slack's parser even though the operator
+            # never visits it in the D10 flow.
+            redirect_url="https://localhost/unused-by-d10",
+            include_private_channels=include_private,
+            include_dms=include_dms,
+        )
+        manifest_json = json.dumps(manifest, indent=2)
+
+        ctx.session[_K_MANIFEST_JSON] = manifest_json
+        ctx.session[_K_DISPLAY_NAME] = display_name
+
+        message = (
+            "Copy the manifest JSON below, then continue:\n\n"
+            "1. Open https://api.slack.com/apps and click 'Create New App'\n"
+            "2. Choose 'From a manifest'\n"
+            "3. Pick your workspace, paste the JSON, click Next → Create\n"
+            "4. On the new app's page: sidebar → 'Install App' → "
+            "'Install to Workspace' → Allow\n"
+            "5. Go to 'OAuth & Permissions' and copy the "
+            "'Bot User OAuth Token' (xoxb-...) — you'll paste it below.\n\n"
+            "--- MANIFEST JSON ---\n"
+            f"{manifest_json}\n"
+            "--- END MANIFEST ---"
+        )
+
+        return StepResult(
+            next_step="paste_bot_token",
+            message=message,
+            extra={
+                "manifest_json": manifest_json,
+                "display_name": display_name,
+            },
+        )
+
+    def _step_paste_bot_token_d10(
+        self, inputs: dict[str, Any], ctx: ProvisionContext
+    ) -> StepResult:
+        """Validate + persist the xoxb- bot token pasted from Slack.
+
+        D10's step 2. Differs from the legacy ``_step_paste_bot_token``
+        only by an upfront ``auth.test`` call: since this is the FIRST
+        Slack-side action of the D10 flow, a typo'd token would otherwise
+        only surface at adapter-start time. ``auth.test`` is a single
+        HTTP round-trip — cheap insurance.
+        """
+        bot_token = str(inputs.get("bot_token", "")).strip()
+        if not bot_token:
+            return StepResult(
+                error="bot_token is required", error_pointer="/bot_token"
+            )
+        if not bot_token.startswith("xoxb-"):
+            return StepResult(
+                error="Bot token must start with xoxb-",
+                error_pointer="/bot_token",
+            )
+
+        # Validate so we don't store junk + advance.
+        try:
+            auth = auth_test(bot_token)
+        except SlackApiError as exc:
+            return StepResult(
+                error=f"Slack rejected the bot token: {exc} (code={exc.code})",
+                error_pointer="/bot_token",
+            )
+
+        team_id = str(auth.get("team_id", "") or "")
+        user_id = str(auth.get("user_id", "") or "")
+
+        writes = {"SLACK_BOT_TOKEN": bot_token}
+        if team_id:
+            writes["SLACK_TEAM_ID"] = team_id
+        ctx.secrets.write(_per_bot(ctx.bot_name, writes))
+        ctx.session[_K_OAUTH_DONE] = True
+
+        return StepResult(
+            next_step="paste_app_token",
+            message=(
+                f"Bot token validated (workspace: {auth.get('team', '?')}, "
+                f"bot user: {user_id}). One more step."
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # LEGACY Step 1 — manifest registration via apps.manifest.create.
+    # Kept for distributable-app workflows (still callable from
+    # ``provision('config_token', …)``). NOT surfaced by wizard_steps()
+    # anymore — that path produced orphan apps for non-distributable
+    # workspaces (spec 08 D10, project memory project_slack_install_models).
     # ------------------------------------------------------------------
 
     def _step_config_token(
