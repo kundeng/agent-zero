@@ -486,7 +486,12 @@ class ChannelRouter(ChannelSetup):
             name=f"channel:{msg.channel_type}:{msg.chat_id}",
         )
 
-        project_name = cfg.project_for_chat(msg.chat_id) if cfg else None
+        # For project-binding lookup, use the platform's channel id when
+        # available (Slack stashes it in metadata["channel"]; chat_id
+        # there is the thread_ts). For Telegram/Discord, chat_id IS the
+        # channel id so the fallback is correct.
+        binding_key = (msg.metadata.get("channel") if msg.metadata else None) or msg.chat_id
+        project_name = cfg.project_for_chat(binding_key) if cfg else None
         if project_name:
             try:
                 from python.helpers import projects as projects_helper  # type: ignore
