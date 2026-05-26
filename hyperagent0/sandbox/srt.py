@@ -124,6 +124,13 @@ def _read_project_network_allow(project_dir: str | None) -> list[str]:
     here because the sandbox should always come up — a malformed
     project.json shouldn't crash code-exec, it should just fall back
     to the default-deny policy.
+
+    Direct path read (not the ``hyperagent0.projects.load_project_*``
+    helper) because the project_dir passed here MAY be the
+    ``project_folder`` override path (spec 09 P1.9) rather than the
+    canonical ``usr/projects/<name>/`` location. Resolving by name
+    would mis-read the override case. See spec 10 follow-up for a
+    proper backend-API fix that threads the project name explicitly.
     """
 
     if not project_dir:

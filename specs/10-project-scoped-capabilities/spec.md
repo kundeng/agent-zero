@@ -1,6 +1,6 @@
 ---
 spec_id: 10-project-scoped-capabilities
-status: DRAFT
+status: PARTIAL
 since: 2026-05-24
 until: null
 epic: projects
@@ -161,21 +161,13 @@ pattern. Richer per-tool toggles can come in P2.
 
 ### P1 — Must Do
 
-- [ ] 1.1 `hyperagent0/projects.py` (new file from spec 09) gains
-  `load_project_mcp_servers(name) -> str | None` and
-  `load_project_network_allow(name) -> list[str]`.
-- [ ] 1.2 `python/helpers/mcp_handler.py` MCPConfig resolution
-  detects active project (from current AgentContext) and uses project
-  MCP config when present.
-- [ ] 1.3 `hyperagent0/sandbox/srt.py:_ensure_profile` reads project
-  `network.allow` + global `sandbox_network_default`, writes union
-  into the per-project srt profile.
-- [ ] 1.4 `subagents.get_paths()` prepends `usr/projects/_default/.a0proj/skills` when no project active and `_default` exists, per D3a. (No rewrite of `list_skills` needed — original D3 was based on a misread.)
-- [ ] 1.5 Knowledge wiring verification (read code, add test if missing).
-- [ ] 1.6 Settings field `sandbox_network_default` in `python/helpers/settings.py`.
-- [ ] 1.7 Project schema migration: existing `project.json` files
-  without `network` field get `{"allow": []}` on first save (no
-  behavior change without explicit allowlist).
+- [x] 1.1 `hyperagent0/projects.py` shipped 2026-05-25: `load_project_mcp_servers(name)` (raw JSON string or `None`) + `load_project_network_allow(name)` (list, defensive empty on missing/malformed). 7 tests in `tests/test_project_capabilities.py`.
+- [ ] 1.2 `python/helpers/mcp_handler.py` MCPConfig resolution per-project. **Deferred** — the upstream `MCPConfig` is a process-global singleton (`get_instance()`), so per-context server sets need a non-trivial refactor (either context-aware lookup at `get_tools_prompt()` time, or separate MCPConfig instances per project). Helper `load_project_mcp_servers` is in place; the consumer needs its own session. Not blocking the Mac install since users without `mcp_servers.json` per project get the global config as today.
+- [x] 1.3 `hyperagent0/sandbox/srt.py:_ensure_profile` already reads project `network.allow` + global `sandbox_network_default` and writes the union into the per-project srt profile (landed in commit 01078e0). Verified 2026-05-25; left in place pending the bigger backend-API fix to thread project NAME (not just path) through `SandboxBackend.__init__` so the `_default` `project_folder` override case resolves correctly.
+- [x] 1.4 `subagents.get_paths()` falls through to `_default` for projectless agent contexts via `resolve_project_name`. Per spec 10 D3a + spec 09 P1.9 invariant. Test: `test_get_paths_falls_through_to_default_for_projectless_context`.
+- [~] 1.5 Knowledge wiring verification. Read upstream code 2026-05-25: per-project knowledge IS supported via `agent.config.knowledge_subdirs` containing entries like `projects/<name>`, which `memory.abs_knowledge_dir` resolves to `usr/projects/<name>/.a0proj/knowledge`. **But it is NOT automatically wired**: `initialize.py` sets `knowledge_subdirs = [settings.agent_knowledge_subdir, "default"]` globally, and `activate_project_in_chat` doesn't mutate that list. **Operator workaround**: set `settings.agent_knowledge_subdir` to `projects/<name>` manually. **Proper fix is P2** — needs an extension or per-call resolution at `memory.py:473`.
+- [x] 1.6 `Settings.sandbox_network_default` exists in `python/helpers/settings.py:139` + populated at default 2026-05-24.
+- [x] 1.7 Project schema migration: covered by design. `load_project_network_allow` returns `[]` for missing-field project.json (defensive default), so existing files without `network` are equivalent to `{"allow": []}` at read time without needing a write-side migration.
 
 ### P2 — Should Do
 
@@ -224,3 +216,44 @@ wildcard is only used by admin/management surfaces (Web UI skill
 browser, CLI lister) which arguably should see all skills. D3
 revised to document this; new D3a covers the `_default`-project
 bridging once spec 09 lands. No skills code fix needed.
+
+**2026-05-25 (P1 data-layer shipped)** — Five of seven P1 tasks
+shipped, two deferred with explicit reasons:
+
+* P1.1: `hyperagent0.projects.load_project_mcp_servers(name)` and
+  `load_project_network_allow(name)` added. Both are defensive: empty
+  list / `None` on missing or malformed files so the sandbox boot
+  never fails on a broken project.json. 7 unit tests.
+* P1.3: confirmed `srt._ensure_profile` reads project network +
+  global default and writes the union (was already shipped in
+  01078e0). Caveat noted: when `_default` carries a `project_folder`
+  override (spec 09 P1.9), the path passed to srt is the override
+  path, not the canonical `usr/projects/_default/`. The basename
+  derivation in `_profile_path` and `_read_project_network_allow`
+  picks the override's basename as the project name. Existing
+  brokenness; properly fixed by threading project NAME through the
+  `SandboxBackend` constructor — separate session.
+* P1.4: `subagents.get_paths` now calls `resolve_project_name()` so
+  projectless agent contexts resolve through `_default`'s
+  `.a0proj/skills` (and per-profile / instructions / knowledge),
+  matching the spec 09 P1.9 invariant. Test verifies it.
+* P1.6: `Settings.sandbox_network_default` already shipped earlier.
+* P1.7: covered by `load_project_network_allow`'s defensive default
+  — old project.json files read as `{"allow": []}` without a
+  write-side migration.
+
+Deferred:
+
+* P1.2 (per-project MCP servers): `MCPConfig` is a process-global
+  singleton via `get_instance()`. Per-context server sets need
+  either a context-aware lookup at `get_tools_prompt()` time, or
+  separate MCPConfig instances per project. The helper
+  `load_project_mcp_servers` is in place; the consumer wiring is its
+  own session. Not blocking any current user since installs without
+  a project `mcp_servers.json` get the global config unchanged.
+* P1.5 (knowledge wiring): upstream supports per-project knowledge
+  via `knowledge_subdirs` entries prefixed `projects/<name>`, but
+  `activate_project_in_chat` doesn't auto-append this. Operator
+  workaround: set `settings.agent_knowledge_subdir = projects/<name>`
+  manually. Proper auto-wire needs an extension at memory-query
+  time — moved to P2.

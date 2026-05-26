@@ -118,3 +118,63 @@ def resolve_project_name(explicit_name: Optional[str]) -> str:
     if explicit_name and str(explicit_name).strip():
         return str(explicit_name).strip()
     return DEFAULT_PROJECT_NAME
+
+
+# ---------------------------------------------------------------------------
+# Spec 10 P1 — per-project capability helpers
+# ---------------------------------------------------------------------------
+
+
+def load_project_mcp_servers(name: str) -> Optional[str]:
+    """Return the project's MCP servers JSON string, or ``None``.
+
+    Spec 10 D1: an ``.a0proj/mcp_servers.json`` file at the project's
+    metadata folder *replaces* the global ``settings.json.mcp_servers``
+    for that project. We return the raw string (not parsed JSON) because
+    the upstream :class:`MCPConfig.update` consumer expects a string.
+
+    Returns ``None`` when the file is missing OR contains an empty /
+    whitespace-only payload — that's the signal for the caller to fall
+    back to the global config. Malformed JSON is propagated as the
+    raw string so the upstream parser surfaces the error in its
+    standard place rather than us guessing.
+    """
+
+    pj = project_meta_dir(name) / "mcp_servers.json"
+    try:
+        content = pj.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not content.strip():
+        return None
+    return content
+
+
+def load_project_network_allow(name: str) -> list[str]:
+    """Return the project's ``network.allow`` list from ``project.json``.
+
+    Spec 10 D2: the sandbox network allowlist is layered — operator's
+    global (``Settings.sandbox_network_default``) ∪ per-project
+    (``project.json.network.allow``). This is the per-project side of
+    the union; the global side is read by ``srt._global_network_default``.
+
+    Returns ``[]`` when the file is missing, malformed, or doesn't
+    declare a network section — defensive, since a broken project.json
+    must not prevent the sandbox from coming up.
+    """
+
+    pj = project_meta_dir(name) / "project.json"
+    try:
+        with pj.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    net = data.get("network")
+    if not isinstance(net, dict):
+        return []
+    allow = net.get("allow", [])
+    if not isinstance(allow, list):
+        return []
+    return [str(host) for host in allow if isinstance(host, (str, bytes))]

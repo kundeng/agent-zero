@@ -128,6 +128,7 @@ Status legend: **SHIPPED** = P1 in-spec features all merged with tests. **PARTIA
 | [07-install-ux](specs/07-install-ux/spec.md) | SHIPPED | curl\|bash installer, repo path resolver, install user journeys | 01, 03 |
 | [08-channel-provisioning-ux](specs/08-channel-provisioning-ux/spec.md) | SHIPPED | Settings → Channels UI tab + `haz channel` CLI + Slack/Telegram/Discord provisioners. D10 paste-manifest flow shipped (no more orphan apps); daemon Slack `invalid_auth` resolved 2026-05-25 by spec 09 lifecycle refactor. | 04, 06 |
 | [09-bot-project-model](specs/09-bot-project-model/spec.md) | SHIPPED | Multi-bot per platform, ThreadStore `bot_name` key, `_default` implicit project + four-site branch collapse. P1 + P2 done; integration test proven via `tests/test_lifecycle_multibot.py` + daemon `invalid_auth` resolved 2026-05-25 | 04, 06, 08 |
+| [10-project-scoped-capabilities](specs/10-project-scoped-capabilities/spec.md) | PARTIAL | Project network allowlist union (P1.3) shipped; per-project helpers + `_default` skills fallthrough shipped 2026-05-25. **Per-project MCP (P1.2) deferred — needs MCPConfig refactor; knowledge auto-wire (P1.5) deferred to P2.** UI editors not yet built. | 09 |
 
 ### Setting up Slack — read the runbook first
 

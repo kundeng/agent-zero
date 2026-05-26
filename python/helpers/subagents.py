@@ -315,8 +315,19 @@ def get_paths(
 
     if include_project and agent:
         from python.helpers import projects
+        from hyperagent0.projects import resolve_project_name
 
-        project_name = projects.get_context_project_name(agent.context) or ""
+        # Spec 09 P1.9 + Spec 10 D3a: every agent runs inside some
+        # project — explicit binding, or the implicit ``_default``.
+        # Falling through to ``_default`` here is what makes
+        # ``usr/projects/_default/.a0proj/skills`` reachable for
+        # projectless chats, per spec 10 P1.4. The agent monologue
+        # path always passes an Agent; admin surfaces (which want the
+        # global wildcard scan) call with ``agent=None`` and never
+        # enter this branch.
+        project_name = resolve_project_name(
+            projects.get_context_project_name(agent.context)
+        )
 
         if project_name and profile_name:
             # project/agents/<profile>/...
