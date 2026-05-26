@@ -796,6 +796,16 @@ async def test_request_all_entries_include_correlation_id():
 
 
 def test_debug_logging_respects_runtime_flag(monkeypatch):
+    """``_debug`` honors the ``A0_WS_DEBUG`` environment variable.
+
+    The previous version of this test asserted that
+    ``runtime.is_development()`` gated the log call, but the
+    implementation pivoted to an explicit env-var gate
+    (``websocket_manager.py:_debug``) so development boxes don't have
+    to print every websocket message just because they're in dev mode.
+    The test now reflects what ``_debug`` actually does.
+    """
+
     socketio = FakeSocketIOServer()
     manager = WebSocketManager(socketio, threading.RLock())
 
@@ -805,20 +815,37 @@ def test_debug_logging_respects_runtime_flag(monkeypatch):
         logs.append(message)
 
     monkeypatch.setattr("python.helpers.print_style.PrintStyle.debug", staticmethod(capture))
-    monkeypatch.setattr("python.helpers.websocket_manager.runtime.is_development", lambda: False)
 
+    # No env var → silent.
+    monkeypatch.delenv("A0_WS_DEBUG", raising=False)
     manager._debug("should-not-log")  # noqa: SLF001
     assert logs == []
 
-    monkeypatch.setattr("python.helpers.websocket_manager.runtime.is_development", lambda: True)
+    # Env var set → log fires.
+    monkeypatch.setenv("A0_WS_DEBUG", "1")
     manager._debug("should-log")  # noqa: SLF001
     assert logs == ["should-log"]
+
+    # Truthy variants the impl accepts.
+    for value in ("true", "yes", "on", "TRUE"):
+        logs.clear()
+        monkeypatch.setenv("A0_WS_DEBUG", value)
+        manager._debug("variant")
+        assert logs == ["variant"], f"variant {value!r} did not enable debug"
 
 
 @pytest.mark.asyncio
 async def test_diagnostic_event_emitted_for_inbound():
+    """``register_diagnostic_watcher`` is a no-op when
+    ``runtime.is_development()`` is False at manager-construction time.
+    Pytest runs are not "development" by that flag, so the test must
+    flip ``_diagnostics_enabled=True`` on the constructed manager
+    (cheaper than monkey-patching every call to ``is_development``
+    BEFORE construction)."""
+
     socketio = FakeSocketIOServer()
     manager = WebSocketManager(socketio, threading.RLock())
+    manager._diagnostics_enabled = True  # noqa: SLF001 — see docstring
 
     results: list[dict[str, Any]] = []
     DummyHandler._reset_instance_for_testing()

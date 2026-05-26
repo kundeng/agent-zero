@@ -236,6 +236,12 @@ async def test_diagnostics_include_source_namespace_and_deliver_on_dev_namespace
     socketio = FakeSocketIOServer()
     manager = WebSocketManager(socketio, threading.RLock())
     manager._schedule_lifecycle_broadcast = lambda *_args, **_kwargs: None  # type: ignore[assignment]
+    # WebSocketManager gates diagnostic-watcher registration on
+    # ``runtime.is_development()`` evaluated at construction. Pytest
+    # runs are not "development" by that flag, so flip the guard
+    # directly to let the test exercise diagnostic delivery. Same
+    # workaround as `test_diagnostic_event_emitted_for_inbound`.
+    manager._diagnostics_enabled = True  # noqa: SLF001
 
     ns_state = "/state_sync"
     ns_dev = "/dev_websocket_test"
