@@ -60,6 +60,24 @@ haz start              # foreground; -d to daemonize
 
 Open <http://localhost:50080>, pick your LLM provider in **Settings**.
 
+> **On macOS with a Claude Pro/Max subscription**, skip the API key
+> entirely:
+>
+> ```bash
+> pip install hyperagent0[claude-sdk]   # adds claude-agent-sdk if not already installed
+> haz config set chat_model_provider claude-sdk
+> haz config set chat_model_name      claude-sonnet-4-5
+> # Optional — only if `claude` is not on PATH:
+> haz config set claude_sdk_cli_path /opt/homebrew/bin/claude
+> haz check                              # should return OK
+> ```
+>
+> The agent spawns your logged-in `claude` CLI as a subprocess and
+> inherits its auth — no `ANTHROPIC_API_KEY` consumed. This is the
+> path the fork was built for on personal Macs. Background:
+> [docs-haz/how-it-works.md](docs-haz/how-it-works.md#reading-guide-for-the-specs)
+> § spec 02.
+
 Where things land:
 
 | Path | What's there |
@@ -71,9 +89,18 @@ Where things land:
 Requirements: Python 3.12+, git. The script will tell you if either is
 missing and how to install it for your OS.
 
-**To pick per-project container isolation**, just toggle the sandbox
-mode in the UI's Settings (or run `haz config set sandbox_mode docker`)
-after install — same install path either way.
+**Code-execution sandbox.** The default is `none` (commands run as
+your user on the host, no extra isolation). Two opt-in alternatives:
+
+| Mode | What it does | Prereq |
+|------|--------------|--------|
+| `none` (default) | Bare PTY subprocess on the host. No isolation. | — |
+| `sandbox` (srt) | Wraps the bash session in Anthropic's [sandbox-runtime](https://github.com/anthropic-experimental/sandbox-runtime). Syscall filter + network allowlist; shell state survives across commands. | `npm install -g @anthropic-ai/sandbox-runtime` |
+| `ssh` | Runs code on a remote host via `asyncssh` (set via `rfc_url`). | An SSH-reachable host you control |
+
+Flip modes with `haz config set sandbox_mode sandbox` (or `ssh`, or
+`none`). Side-by-side comparison + per-mode internals:
+[docs-haz/how-it-works.md § sandbox modes](docs-haz/how-it-works.md#the-three-sandbox-modes--what-none-srt-ssh-actually-mean).
 
 ### Option 3: Compose, no host clone
 
