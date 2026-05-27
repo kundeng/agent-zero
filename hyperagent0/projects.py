@@ -178,3 +178,121 @@ def load_project_network_allow(name: str) -> list[str]:
     if not isinstance(allow, list):
         return []
     return [str(host) for host in allow if isinstance(host, (str, bytes))]
+
+
+# ---------------------------------------------------------------------------
+# Spec 10 P2 — writers for the per-project capability editors
+# ---------------------------------------------------------------------------
+
+
+def save_project_mcp_servers(name: str, payload: Optional[str]) -> None:
+    """Write the project's ``.a0proj/mcp_servers.json`` from the editor.
+
+    Spec 10 P2.1 / D1: the per-project MCP editor mirrors the global
+    MCP editor — operator pastes a JSON document, we persist it. The
+    resolver (:mod:`hyperagent0.mcp`) reads it on next agent
+    activation.
+
+    Validation rules:
+
+    * ``payload`` may be ``None`` or empty / whitespace-only → the
+      file is *deleted* if it exists. That's the documented signal for
+      "fall through to global MCP", matching the read-side contract
+      in :func:`load_project_mcp_servers`.
+    * Otherwise the payload must parse as JSON. We don't enforce the
+      schema beyond that — the upstream :class:`MCPConfig` parser is
+      already lenient (``dirty_json``) and surfaces shape errors in
+      its standard place when the agent next requests its MCP tools.
+    * Cache invalidation: any cached per-project MCPConfig for this
+      name is dropped so the next ``get_mcp_config_for_agent`` rebuild
+      picks up the change. Without this, the file change only takes
+      effect after a daemon restart.
+
+    Raises ``ValueError`` on JSON parse failure (the editor surfaces
+    this back to the user as a validation error).
+    """
+
+    meta = project_meta_dir(name)
+    pj = meta / "mcp_servers.json"
+
+    if payload is None or not payload.strip():
+        # Empty payload = delete file = fall through to global MCP.
+        if pj.exists():
+            pj.unlink()
+        _invalidate_mcp_cache(name)
+        return
+
+    try:
+        json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"mcp_servers.json must be valid JSON: {exc}") from exc
+
+    meta.mkdir(parents=True, exist_ok=True)
+    pj.write_text(payload.rstrip() + "\n", encoding="utf-8")
+    _invalidate_mcp_cache(name)
+
+
+def save_project_network_allow(name: str, hosts: list[str]) -> list[str]:
+    """Merge a new ``network.allow`` list into the project's ``project.json``.
+
+    Spec 10 P2.2 / D2: the per-project network allowlist editor writes
+    into the ``network`` section of ``project.json``, preserving any
+    other top-level keys (``title``, ``description``, instructions,
+    ``project_folder`` override, etc.).
+
+    * Non-string entries are filtered out (defensive — matches the
+      read-side contract in :func:`load_project_network_allow`).
+    * If ``project.json`` doesn't exist or is malformed, this is a
+      no-op write that creates a minimal stub with just the ``network``
+      section. The caller is expected to have created the project
+      first via ``projects.create_project``; this writer is the *edit*
+      path, not the *create* path.
+
+    Returns the normalized hosts list that was actually written.
+    """
+
+    cleaned = [str(host).strip() for host in hosts if isinstance(host, (str, bytes)) and str(host).strip()]
+
+    meta = project_meta_dir(name)
+    pj = meta / "project.json"
+
+    data: dict[str, Any] = {}
+    try:
+        with pj.open("r", encoding="utf-8") as fh:
+            loaded = json.load(fh)
+        if isinstance(loaded, dict):
+            data = loaded
+    except (OSError, json.JSONDecodeError):
+        # Falls through to writing a minimal stub.
+        pass
+
+    net = data.get("network")
+    if not isinstance(net, dict):
+        net = {}
+    net["allow"] = cleaned
+    data["network"] = net
+
+    meta.mkdir(parents=True, exist_ok=True)
+    pj.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return cleaned
+
+
+def _invalidate_mcp_cache(project_name: str) -> None:
+    """Drop the cached per-project MCPConfig for ``project_name``.
+
+    Lazy import so the writer doesn't pull the resolver (and through it
+    the upstream MCP machinery) at module import time. The cache itself
+    lives in :mod:`hyperagent0.mcp`; this is just the convenient call
+    site for writers.
+    """
+
+    try:
+        from hyperagent0 import mcp as project_mcp
+
+        project_mcp.reset_cache(project_name)
+    except Exception:  # noqa: BLE001 — best-effort invalidation
+        logger.debug(
+            "save_project_mcp_servers: could not invalidate cache for %r",
+            project_name,
+            exc_info=True,
+        )

@@ -1,6 +1,7 @@
 from python.helpers.api import ApiHandler, Input, Output, Request, Response
 from python.helpers import projects
 from python.helpers.notification import NotificationManager, NotificationType, NotificationPriority
+from hyperagent0 import projects as hp_projects
 
 
 class Projects(ApiHandler):
@@ -32,6 +33,15 @@ class Projects(ApiHandler):
                 data = self.deactivate_project(ctxid)
             elif action == "file_structure":
                 data = self.get_file_structure(input.get("name", None), input.get("settings"))
+            # Spec 10 P2 — per-project capability editors.
+            elif action == "mcp_get":
+                data = self.get_project_mcp(input.get("name", None))
+            elif action == "mcp_set":
+                data = self.set_project_mcp(input.get("name", None), input.get("payload", None))
+            elif action == "network_get":
+                data = self.get_project_network(input.get("name", None))
+            elif action == "network_set":
+                data = self.set_project_network(input.get("name", None), input.get("allow", None))
             else:
                 raise Exception("Invalid action")
 
@@ -146,3 +156,44 @@ class Projects(ApiHandler):
             basic_data["file_structure"] = settings # type: ignore
         # get structure
         return projects.get_file_structure(name, basic_data)
+
+    # ------------------------------------------------------------------
+    # Spec 10 P2 — per-project capability editors (MCP + network)
+    # ------------------------------------------------------------------
+
+    def get_project_mcp(self, name: str | None):
+        if not name:
+            raise Exception("Project name is required")
+        payload = hp_projects.load_project_mcp_servers(name)
+        # ``None`` is the fall-through-to-global signal; the UI renders it
+        # as an empty editor with a "using global MCP" hint.
+        return {"name": name, "payload": payload or "", "uses_global": payload is None}
+
+    def set_project_mcp(self, name: str | None, payload):
+        if not name:
+            raise Exception("Project name is required")
+        if payload is not None and not isinstance(payload, str):
+            raise Exception("payload must be a string (raw JSON text) or null")
+        try:
+            hp_projects.save_project_mcp_servers(name, payload)
+        except ValueError as exc:
+            # Surface JSON parse errors as a structured editor error.
+            raise Exception(str(exc)) from exc
+        # Round-trip back the persisted state so the UI can refresh
+        # without a second fetch.
+        return self.get_project_mcp(name)
+
+    def get_project_network(self, name: str | None):
+        if not name:
+            raise Exception("Project name is required")
+        return {"name": name, "allow": hp_projects.load_project_network_allow(name)}
+
+    def set_project_network(self, name: str | None, allow):
+        if not name:
+            raise Exception("Project name is required")
+        if allow is None:
+            allow = []
+        if not isinstance(allow, list):
+            raise Exception("allow must be a list of host strings")
+        written = hp_projects.save_project_network_allow(name, allow)
+        return {"name": name, "allow": written}

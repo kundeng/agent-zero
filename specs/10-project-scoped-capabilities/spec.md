@@ -162,7 +162,7 @@ pattern. Richer per-tool toggles can come in P2.
 ### P1 — Must Do
 
 - [x] 1.1 `hyperagent0/projects.py` shipped 2026-05-25: `load_project_mcp_servers(name)` (raw JSON string or `None`) + `load_project_network_allow(name)` (list, defensive empty on missing/malformed). 7 tests in `tests/test_project_capabilities.py`.
-- [ ] 1.2 `python/helpers/mcp_handler.py` MCPConfig resolution per-project. **Deferred** — the upstream `MCPConfig` is a process-global singleton (`get_instance()`), so per-context server sets need a non-trivial refactor (either context-aware lookup at `get_tools_prompt()` time, or separate MCPConfig instances per project). Helper `load_project_mcp_servers` is in place; the consumer needs its own session. Not blocking the Mac install since users without `mcp_servers.json` per project get the global config as today.
+- [x] 1.2 Per-project MCPConfig resolution shipped 2026-05-26 via `hyperagent0/mcp.py:get_mcp_config_for_agent`. Sibling resolver (no edits to upstream `MCPConfig`); caches per-project `MCPConfig` instances keyed on project name, builds in a worker thread to dodge `asyncio.run`-inside-loop, falls through to the global singleton when no per-project `mcp_servers.json` exists. Consumers wired: `python/extensions/system_prompt/_10_system_prompt.py:get_mcp_tools_prompt` + `agent.py:876` MCP tool lookup. Admin APIs keep using `MCPConfig.get_instance()` (they show the operator's global view). 9 tests in `tests/test_project_mcp_resolver.py`.
 - [x] 1.3 `hyperagent0/sandbox/srt.py:_ensure_profile` already reads project `network.allow` + global `sandbox_network_default` and writes the union into the per-project srt profile (landed in commit 01078e0). Verified 2026-05-25; left in place pending the bigger backend-API fix to thread project NAME (not just path) through `SandboxBackend.__init__` so the `_default` `project_folder` override case resolves correctly.
 - [x] 1.4 `subagents.get_paths()` falls through to `_default` for projectless agent contexts via `resolve_project_name`. Per spec 10 D3a + spec 09 P1.9 invariant. Test: `test_get_paths_falls_through_to_default_for_projectless_context`.
 - [~] 1.5 Knowledge wiring verification. Read upstream code 2026-05-25: per-project knowledge IS supported via `agent.config.knowledge_subdirs` containing entries like `projects/<name>`, which `memory.abs_knowledge_dir` resolves to `usr/projects/<name>/.a0proj/knowledge`. **But it is NOT automatically wired**: `initialize.py` sets `knowledge_subdirs = [settings.agent_knowledge_subdir, "default"]` globally, and `activate_project_in_chat` doesn't mutate that list. **Operator workaround**: set `settings.agent_knowledge_subdir` to `projects/<name>` manually. **Proper fix is P2** — needs an extension or per-call resolution at `memory.py:473`.
@@ -171,11 +171,20 @@ pattern. Richer per-tool toggles can come in P2.
 
 ### P2 — Should Do
 
-- [ ] 2.1 Web UI Projects panel: per-project MCP editor (mirrors
-  global MCP UI).
-- [ ] 2.2 Web UI Projects panel: per-project network allowlist editor
-  (host/pattern list, with explanation).
-- [ ] 2.3 Tests: project MCP replace semantics.
+- [~] 2.1 Per-project MCP editor — **backend shipped 2026-05-26**:
+  ``hyperagent0.projects.save_project_mcp_servers`` (write / delete +
+  resolver-cache invalidation) and ``Projects.mcp_get`` / ``mcp_set``
+  API actions in ``python/api/projects.py``. Frontend editor (Web UI
+  tab in the Projects settings panel) is the remaining piece —
+  mirrors the existing global MCP editor pattern.
+- [~] 2.2 Per-project network allowlist editor — **backend shipped
+  2026-05-26**: ``hyperagent0.projects.save_project_network_allow``
+  (preserves other ``project.json`` keys) and ``Projects.network_get``
+  / ``network_set`` API actions. Frontend editor (host/pattern list
+  with explanation copy) is the remaining piece.
+- [x] 2.3 Project MCP replace semantics covered by
+  ``tests/test_project_mcp_resolver.py`` (9 tests for the resolver
+  contract, 2026-05-26).
 - [ ] 2.4 Tests: sandbox network union layering.
 - [ ] 2.5 Tests: skills only loaded from active project + globals.
 - [ ] 2.6 Tests: knowledge retrieval prefers project knowledge.
@@ -244,16 +253,63 @@ shipped, two deferred with explicit reasons:
 
 Deferred:
 
-* P1.2 (per-project MCP servers): `MCPConfig` is a process-global
-  singleton via `get_instance()`. Per-context server sets need
-  either a context-aware lookup at `get_tools_prompt()` time, or
-  separate MCPConfig instances per project. The helper
-  `load_project_mcp_servers` is in place; the consumer wiring is its
-  own session. Not blocking any current user since installs without
-  a project `mcp_servers.json` get the global config unchanged.
 * P1.5 (knowledge wiring): upstream supports per-project knowledge
   via `knowledge_subdirs` entries prefixed `projects/<name>`, but
   `activate_project_in_chat` doesn't auto-append this. Operator
   workaround: set `settings.agent_knowledge_subdir = projects/<name>`
   manually. Proper auto-wire needs an extension at memory-query
   time — moved to P2.
+
+**2026-05-26 (P1.2 shipped)** — Per-project MCP resolver landed as
+`hyperagent0/mcp.py:get_mcp_config_for_agent`. Design notes:
+
+* Sibling resolver, not a refactor of upstream `MCPConfig`. The
+  singleton lives on; the resolver chooses between it and a
+  per-project instance. Keeps blast radius minimal (one new file,
+  two consumer line edits) and means the four admin APIs in
+  `python/api/mcp_*.py` continue working unchanged.
+* `MCPConfig.__init__` calls `asyncio.run(_init_all())` to fetch
+  each server's tool list synchronously. That can't happen inside
+  an existing event loop (the system-prompt extension runs in
+  one). Workaround: build the per-project instance on a daemon
+  thread, join immediately. After the first build the cache hits
+  with zero overhead.
+* Caveat: per-project instances keep their subprocesses /
+  connections alive for the daemon's lifetime — no GC, no
+  hot-swap. A `reset_cache(project_name)` helper exists for
+  tests and a future "reload MCP" UI action, but nothing in the
+  runtime calls it yet. Changing `mcp_servers.json` requires a
+  daemon restart, same as the global path on a settings save.
+* Per spec 09 P1.9: projectless contexts resolve through `_default`,
+  so dropping `mcp_servers.json` into `usr/projects/_default/.a0proj/`
+  is the way to override MCP for chats with no explicit binding.
+
+P1 status after this: 6/7 shipped; P1.5 (knowledge auto-wire) is
+the only remaining item, explicitly deferred to P2.
+
+**2026-05-26 (P2 backend shipped)** — Per-project capability
+editors landed on the backend side:
+
+* ``hyperagent0.projects.save_project_mcp_servers(name, payload)`` —
+  writes / deletes ``.a0proj/mcp_servers.json`` and invalidates the
+  resolver cache so the change is live without a daemon restart.
+  Empty / ``None`` payload deletes the file (= fall-through to
+  global MCP, matching the read contract).
+* ``hyperagent0.projects.save_project_network_allow(name, hosts)`` —
+  merges ``network.allow`` into ``project.json`` while preserving
+  ``title`` / ``description`` / ``project_folder`` / etc. Filters
+  blanks and non-strings defensively.
+* ``Projects.mcp_get`` / ``mcp_set`` / ``network_get`` / ``network_set``
+  API actions in ``python/api/projects.py``. ``mcp_get`` reports
+  ``uses_global=True`` when no per-project file exists so the UI
+  can render the "using global MCP" hint.
+
+Tests: 18 in ``tests/test_project_capabilities_editors.py`` cover
+the writer contract (preserve / overwrite / validation / cache
+invalidation) and the API-action dispatch.
+
+Remaining for P2: the Web UI tabs themselves (P2.1 / P2.2
+frontend) — these are React/JS work in ``webui/components/`` that
+needs the dev server running to verify. Backed-out of an overnight
+session to be picked up under daylight with the daemon up. P2.4 /
+P2.5 / P2.6 integration tests also outstanding.

@@ -4,6 +4,7 @@ from python.helpers.mcp_handler import MCPConfig
 from agent import Agent, LoopData
 from python.helpers.settings import get_settings
 from python.helpers import projects, skills
+from hyperagent0.mcp import get_mcp_config_for_agent
 
 
 class SystemPrompt(Extension):
@@ -46,13 +47,17 @@ def get_tools_prompt(agent: Agent):
 
 
 def get_mcp_tools_prompt(agent: Agent):
-    mcp_config = MCPConfig.get_instance()
+    # Spec 10 D1: when this agent's active project ships its own
+    # mcp_servers.json, that *replaces* the global MCP set; otherwise
+    # falls through to the global singleton. Resolver caches per-project
+    # MCPConfig instances after the first build.
+    mcp_config = get_mcp_config_for_agent(agent)
     if mcp_config.servers:
         pre_progress = agent.context.log.progress
         agent.context.log.set_progress(
             "Collecting MCP tools"
         )  # MCP might be initializing, better inform via progress bar
-        tools = MCPConfig.get_instance().get_tools_prompt()
+        tools = mcp_config.get_tools_prompt()
         agent.context.log.set_progress(pre_progress)  # return original progress
         return tools
     return ""

@@ -869,11 +869,15 @@ class Agent:
 
             tool = None  # Initialize tool to None
 
-            # Try getting tool from MCP first
+            # Try getting tool from MCP first.
+            # Spec 10 D1: resolve through the per-project resolver so a
+            # project with its own mcp_servers.json sees its own tool
+            # set, not whatever the global singleton currently holds.
             try:
-                import python.helpers.mcp_handler as mcp_helper
+                import python.helpers.mcp_handler as mcp_helper  # noqa: F401 — kept for ImportError signal below
+                from hyperagent0.mcp import get_mcp_config_for_agent
 
-                mcp_tool_candidate = mcp_helper.MCPConfig.get_instance().get_tool(
+                mcp_tool_candidate = get_mcp_config_for_agent(self).get_tool(
                     self, tool_name
                 )
                 if mcp_tool_candidate:
