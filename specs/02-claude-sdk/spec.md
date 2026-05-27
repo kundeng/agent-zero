@@ -1,6 +1,6 @@
 ---
 spec_id: 02-claude-sdk
-status: PARTIAL
+status: SHIPPED
 since: 2026-05-20
 until: null
 epic: llm-providers
@@ -76,15 +76,8 @@ Where extensions can replace patches, prefer extensions per CLAUDE.md ("Extensio
 - [x] 1.2 `hyperagent0/claude_sdk/bridge.py` — Tool→Claude schema, tool_use mapping, thinking extractor. 7 tests in `tests/test_claude_sdk_bridge.py` (dict-payload based, no anthropic import).
 - [x] 1.3 `hyperagent0/claude_sdk/wrapper.py` — **uses `claude_agent_sdk.query()` (CLI subprocess, subscription auth), NOT `anthropic.AsyncAnthropic` (API key).** Registered via `models.get_chat_model("claude-sdk")`. 6 tests in `tests/test_claude_sdk_wrapper.py`.
 - [x] 1.4 Settings fields: `claude_sdk_model`, `claude_sdk_cli_path`, `claude_sdk_thinking_budget`, `claude_sdk_max_turns`. `claude_sdk_api_key` retained as a typed field but unused (silently dropped by wrapper).
-- [ ] 1.5 Handle thinking blocks in the agent monologue
-  - **First preference: extension-based.** Try implementing thinking-block handling as a `python/extensions/before_main_llm_call/` + `process_chain_end/` pair, registering through `python/helpers/extension.py`'s `@extensible` framework.
-  - **Fallback: patch `agent.py` monologue loop.** Only if the extension hooks don't expose enough state. Detect thinking content type in response, log thinking blocks (visible in UI but not injected back as user content), pass text + tool_use to existing processing.
-  - Document the choice in the implementation PR.
-  - [src:python/extensions/ OR agent.py]
-- [ ] 1.6 Wire MCP tools through Claude SDK's native MCP support
-  - Bridge logic in `hyperagent0/claude_sdk/mcp.py`
-  - Minimal patch to `python/helpers/mcp_handler.py`: when active provider is `claude-sdk`, route tool registration through the bridge module
-  - [src:python/helpers/mcp_handler.py, hyperagent0/claude_sdk/mcp.py]
+- [x] 1.5 Thinking-block handling — shipped via wrapper-boundary extraction; no agent.py patch or new extension needed (closed 2026-05-26). Resolution detailed in Log entry below: the 2026-05-25 D1 pivot to `claude-agent-sdk` (CLI subprocess) moved the thinking-block detection from "inspect response content blocks inside the agent loop" to "split text vs. thinking at the SDK boundary inside the wrapper". `_iter_block_deltas` returns `(response_delta, thinking_delta)` tuples, `unified_call` aggregates thinking into `reasoning_text` + invokes `reasoning_callback`, and `agent.py:418-433,454` already plumbs `reasoning_callback` through the `reasoning_stream_chunk` extension and discards the `_reasoning` return value — matching the spec's "log thinking blocks (visible in UI but not injected back as user content)" requirement. Contract test: `tests/test_claude_sdk_wrapper.py::test_unified_call_aggregates_text_and_thinking`.
+- [~] 1.6 Wire MCP tools through Claude SDK's native MCP support — **superseded by D1 reframe** (closed 2026-05-26). The 2026-05-25 pivot put the wrapper in pure-completion mode (`allowed_tools=[]`, `max_turns=1`) so Agent Zero's monologue loop owns tool dispatch. Routing MCP tools through the SDK's native path would let the SDK *also* dispatch them, double-looping on top of the agent loop. The bridge code (`hyperagent0/claude_sdk/mcp.py:register_mcp_tools_for_claude` + `MCPConfig.get_tools_for_claude_sdk`) is left in place as scaffolding for a future spec that revisits the "SDK owns tool dispatch" design — currently unwired from the runtime hot path. No regression: MCP tools work for Claude SDK users today via the standard Agent Zero MCP path (spec 10 P1.2 makes that path per-project).
 
 ### P2 — Should Do
 - [ ] 2.1 Test: Claude SDK provider with direct Anthropic API key
@@ -156,3 +149,37 @@ and P1.6 (MCP wiring through SDK native path) still open** — both
 require touching `agent.py` / `mcp_handler.py` and aren't on the
 critical path for "agent runs on Mac using Claude CLI auth", so
 deferred unless live use surfaces a need.
+
+**2026-05-26 (P1.5 + P1.6 closed)** — Walked the wrapper + agent
+loop end-to-end and found that the D1 reframe (CLI-subprocess
+wrapper) had already moved P1.5 across the finish line implicitly,
+and had made P1.6 incoherent.
+
+P1.5 — *thinking blocks*. The wrapper's `_iter_block_deltas`
+splits `(response_delta, thinking_delta)` at the SDK boundary,
+`unified_call` aggregates thinking into `reasoning_text` and
+invokes `reasoning_callback` per chunk, and `agent.py:418-433,454`
+already plumbs `reasoning_callback` through the existing
+`reasoning_stream_chunk` extension chain (originally built for
+o1-style reasoning from LiteLLM) and discards the `_reasoning`
+return value — exactly matching the spec's "log thinking blocks
+(visible in UI but not injected back as user content)"
+requirement. No new extension, no `agent.py` patch. Marked `[x]`
+with the rationale in-line.
+
+P1.6 — *MCP through SDK native path*. The wrapper runs the SDK
+in pure-completion mode (`allowed_tools=[]`, `max_turns=1`) so
+Agent Zero's monologue loop owns dispatch. Wiring MCP tools
+through the SDK's native tool path would let the SDK also
+dispatch them — a double loop on top of A0's loop. Marked
+`[~]` (superseded by D1 reframe). The bridge code in
+`hyperagent0/claude_sdk/mcp.py` + `MCPConfig.get_tools_for_claude_sdk`
+is preserved as scaffolding for a future spec that may revisit
+"SDK owns tools", but is currently unwired from the runtime hot
+path. No user-visible regression: MCP tools work for Claude SDK
+users today via the standard A0 MCP path (and spec 10 P1.2 makes
+that path per-project).
+
+P1 status after this: 6/6 effective items shipped; P1.6 marked
+superseded with rationale. Status field promoted PARTIAL →
+SHIPPED in the frontmatter.

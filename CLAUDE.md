@@ -120,7 +120,7 @@ Status legend: **SHIPPED** = P1 in-spec features all merged with tests. **PARTIA
 | Spec | Status | What it does | Depends on |
 |------|--------|-------------|------------|
 | [01-host-first](specs/01-host-first/spec.md) | SHIPPED | Agent runs on host, sandbox only for code exec | — |
-| [02-claude-sdk](specs/02-claude-sdk/spec.md) | PARTIAL | Claude provider via local `claude` CLI auth (subscription, no API key). P1.1–P1.4 shipped; thinking-extension + MCP-bridge deferred | — |
+| [02-claude-sdk](specs/02-claude-sdk/spec.md) | SHIPPED | Claude provider via local `claude` CLI auth (subscription, no API key). P1.5 (thinking blocks) handled at wrapper boundary + existing reasoning_callback path; P1.6 (MCP through SDK) superseded by D1 reframe (wrapper is pure-completion, A0 owns dispatch). | — |
 | [03-daemon-cli](specs/03-daemon-cli/spec.md) | SHIPPED | `hyperagent0 start/stop/status` (alias `haz`), systemd, pip install | 01 |
 | [04-chat-channels](specs/04-chat-channels/spec.md) | SHIPPED | Telegram, Slack, Discord channel adapters (42 tests) | 01, 03 |
 | [05-project-isolation](specs/05-project-isolation/spec.md) | WITHDRAWN | Scrapped 2026-05-22 — sandbox mode is a single global setting; no per-project override, no cgroup/docker/podman backends | 01 |
@@ -128,7 +128,7 @@ Status legend: **SHIPPED** = P1 in-spec features all merged with tests. **PARTIA
 | [07-install-ux](specs/07-install-ux/spec.md) | SHIPPED | curl\|bash installer, repo path resolver, install user journeys | 01, 03 |
 | [08-channel-provisioning-ux](specs/08-channel-provisioning-ux/spec.md) | SHIPPED | Settings → Channels UI tab + `haz channel` CLI + Slack/Telegram/Discord provisioners. D10 paste-manifest flow shipped (no more orphan apps); daemon Slack `invalid_auth` resolved 2026-05-25 by spec 09 lifecycle refactor. | 04, 06 |
 | [09-bot-project-model](specs/09-bot-project-model/spec.md) | SHIPPED | Multi-bot per platform, ThreadStore `bot_name` key, `_default` implicit project + four-site branch collapse. P1 + P2 done; integration test proven via `tests/test_lifecycle_multibot.py` + daemon `invalid_auth` resolved 2026-05-25 | 04, 06, 08 |
-| [10-project-scoped-capabilities](specs/10-project-scoped-capabilities/spec.md) | PARTIAL | Project network allowlist union (P1.3) shipped; per-project helpers + `_default` skills fallthrough shipped 2026-05-25. **Per-project MCP (P1.2) deferred — needs MCPConfig refactor; knowledge auto-wire (P1.5) deferred to P2.** UI editors not yet built. | 09 |
+| [10-project-scoped-capabilities](specs/10-project-scoped-capabilities/spec.md) | PARTIAL | P1.2 (resolver) + P1.3 (network union) + P1.4 (_default skills) shipped. P2 editor backends (P2.1/P2.2 helpers + API actions) shipped 2026-05-26. **Remaining**: P1.5 knowledge auto-wire (deferred to P2), P2.1/P2.2 Web UI tabs, P2.4–P2.6 integration tests. | 09 |
 
 ### Setting up Slack — read the runbook first
 
