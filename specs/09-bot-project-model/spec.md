@@ -211,7 +211,7 @@ self-filter. No cross-bot leakage.
 - [x] 2.3 Tests: `_default` project bootstrap — covered by `tests/test_hyperagent0_projects_default.py` (4 tests) + `tests/test_projectless_branch_collapse.py::test_default_project_records_project_folder_override`.
 - [x] 2.4 Tests: lifecycle.start_enabled_channels with multi-bot config — shipped 2026-05-25 in `tests/test_lifecycle_multibot.py::test_lifecycle_spawns_one_adapter_per_bot` + skip-disabled + idempotent siblings (3 tests).
 - [x] 2.5 Tests: end-to-end multi-bot dispatch — `tests/test_lifecycle_multibot.py::test_router_receives_per_bot_inbound` proves the router indexes `(channel_type, bot_name)` and surfaces independent per-bot config. (The router's own dispatch was already proven in spec 09 1.5 by `test_router_dispatches_per_bot_independently`.)
-- [x] 2.6 Docs: `docs/channels/slack-setup.md` multi-bot section added 2026-05-25. Covers channels.json list shape, per-bot secret suffix convention, wizard pre-fill behavior, and `haz channel status` per-bot output.
+- [x] 2.6 Docs: `docs-haz/channels/slack-setup.md` multi-bot section added 2026-05-25 (moved from `docs/channels/` to `docs-haz/channels/` on 2026-05-26 to separate our docs from upstream's `docs/` tree). Covers channels.json list shape, per-bot secret suffix convention, wizard pre-fill behavior, and `haz channel status` per-bot output.
 - [x] 2.7 Spec 08 D6 updated 2026-05-25 to document the per-bot suffix convention as the canonical naming rule, with `LEGACY_BOT_NAMES = {"_legacy", "default", ""}` carved out for back-compat.
 
 ### P3 — Nice to Have

@@ -3,6 +3,7 @@
 Fork of [agent0ai/agent-zero](https://github.com/agent0ai/agent-zero) — a personal agentic framework — re-shaped as a host-first hyperagent harness with project isolation, Claude Agent SDK support, daemon lifecycle, chat channel integration, and a one-command install UX.
 
 specs_root: specs/
+docs_root: docs-haz/   # our narrative docs (separate from upstream `docs/`)
 
 ## Branch Strategy
 
@@ -134,7 +135,7 @@ Status legend: **SHIPPED** = P1 in-spec features all merged with tests. **PARTIA
 
 Slack's developer onboarding is the most painful part of this codebase to
 work with. Before touching the Slack wizard, read
-[docs/channels/slack-setup.md](docs/channels/slack-setup.md) — it has the
+[docs-haz/channels/slack-setup.md](docs-haz/channels/slack-setup.md) — it has the
 operator runbook for the working install flow, the three Slack design
 choices that bit us in live testing, and the troubleshooting matrix for
 each error message. The session that produced spec 08 D10 took hours;

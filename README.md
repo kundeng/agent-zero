@@ -14,6 +14,13 @@ What this fork adds on top of upstream agent-zero:
 | Daemon + CLI (`haz` / `hyperagent0`) | `start / stop / status / logs / setup / config` — lazy-loaded, &lt;200ms cold start |
 | Chat channel adapters | Telegram, Slack, Discord with mention-aware routing |
 
+> **Want to understand how this actually works?** See
+> [docs-haz/how-it-works.md](docs-haz/how-it-works.md) — narrative
+> explainer covering the three deployment modes side-by-side, what
+> `install.sh` actually does, where state lives at runtime, the
+> sandbox modes, the projects model, the channels stack, and a
+> reading guide to the design specs.
+
 ---
 
 ## Install
@@ -168,14 +175,14 @@ for everything else.
 ### Slack (longer — read the runbook first)
 
 Slack's first-app developer experience has more sharp edges than any other
-channel HyperAgent Zero supports. **Read [docs/channels/slack-setup.md](docs/channels/slack-setup.md)
+channel HyperAgent Zero supports. **Read [docs-haz/channels/slack-setup.md](docs-haz/channels/slack-setup.md)
 before starting** — it covers the exact steps that work, the three Slack
 design choices that bite you, and the troubleshooting for each error
 message you might hit.
 
 TL;DR (verified live 2026-05-23 against a free-tier workspace):
 
-1. Generate the manifest JSON ([template in the runbook](docs/channels/slack-setup.md#the-manifest-json)).
+1. Generate the manifest JSON ([template in the runbook](docs-haz/channels/slack-setup.md#the-manifest-json)).
 2. https://api.slack.com/apps → Create New App → From a manifest → paste → Create.
 3. Sidebar → Install App → Install to Workspace → Allow → copy `xoxb-`.
 4. Basic Information → App-Level Tokens → Generate (scope `connections:write`) → copy `xapp-`.

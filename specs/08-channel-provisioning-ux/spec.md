@@ -254,7 +254,7 @@ OAuth callback → `install_paste_fallback`) is still callable from
 
 ### D9: Adapter hardening while we're here
 
-**Choice**: Close two small known gaps in `hyperagent0/channels/slack.py` flagged by `NEXT_SESSION_SLACK.md`:
+**Choice**: Close two small known gaps in `hyperagent0/channels/slack.py` flagged during the original Slack live-test session (the `NEXT_SESSION_SLACK.md` brief that drove this spec — since deleted, contents absorbed here and in the Log):
 
 1. **Event-ID dedup**: bounded LRU set (`collections.OrderedDict`, cap 1024) on the adapter; drop on duplicate `event_id` from Slack's payload envelope.
 2. **Own-bot filter**: ignore messages where `event["bot_id"]` equals our own bot id (from `auth.test`). Today the filter only checks `subtype`, so a self-routed message could loop.
@@ -400,7 +400,7 @@ OAuth callback → `install_paste_fallback`) is still callable from
 
 ## Log
 
-**2026-05-22** — Drafted after course correction. Original `NEXT_SESSION_SLACK.md` brief specified a `haz slack provision` CLI; the user pivoted to a web-UI extension. First draft of spec 08 baked Slack in. User flagged that the architecture must generalize across platforms, **not** treat Slack as a special case. Spec rewritten around `BaseProvisioner` + declarative `WizardStep` mirroring the spec-04 `BaseChannel` + registry pattern. Slack stays as the proving P1 implementation; Telegram + Discord land on the same framework in P2. Adding new platforms after this spec ships = one new class file plus a registration line, no framework/UI/CLI changes.
+**2026-05-22** — Drafted after course correction. The original next-session brief (then in `NEXT_SESSION_SLACK.md` at the repo root, deleted 2026-05-26 once its contents were absorbed) specified a `haz slack provision` CLI; the user pivoted to a web-UI extension. First draft of spec 08 baked Slack in. User flagged that the architecture must generalize across platforms, **not** treat Slack as a special case. Spec rewritten around `BaseProvisioner` + declarative `WizardStep` mirroring the spec-04 `BaseChannel` + registry pattern. Slack stays as the proving P1 implementation; Telegram + Discord land on the same framework in P2. Adding new platforms after this spec ships = one new class file plus a registration line, no framework/UI/CLI changes.
 
 **2026-05-22 (build)** — Framework (1.1–1.6) and generic Flask layer (1.7–1.13) implemented. D4 refined during the build: the OAuth callback uses ``/channels_oauth_callback?channel_type=<name>`` instead of the originally-imagined ``/oauth/<channel_type>/callback`` path. Reason: the upstream API auto-loader at ``run_ui.py:494`` derives the route from the module name, so path-variable routing would require an upstream patch (which the spec's conflict-surface budget forbids). Query-string dispatch is behaviorally identical under OAuth 2.0 redirect-URI rules. Spec D4 updated.
 
